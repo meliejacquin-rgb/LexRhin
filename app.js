@@ -28,7 +28,7 @@ const LEVELS = [
 ];
 const KIND_ORDER = ['redaction', 'trad_de_fr', 'trad_fr_de'];
 const KIND_LABEL = { redaction: 'Rédaction en français', trad_de_fr: 'Traduction allemand → français', trad_fr_de: 'Traduction français → allemand' };
-const XP = { vocab: 5, grammar: 10, text: 40, rewrite: 30 };
+const XP = { vocab: 8, hint: 4, grammar: 10, text: 40, rewrite: 30 };
 
 /* ---------- État ---------- */
 function defaults() {
@@ -98,6 +98,43 @@ function makeVocabQuestion(w, forceDir) {
   const options = shuffle([w[field]].concat(distract));
   return { word: w, dir, prompt: dir === 'de_fr' ? w.de : w.fr, options, answer: options.indexOf(w[field]), isNew: !s, last: s ? s.last : null };
 }
+function stripAcc(s) { return s.normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+function normAns(s, keepAcc) {
+  s = String(s || '').toLowerCase().replace(/[’`´]/g, "'").replace(/œ/g, 'oe').replace(/æ/g, 'ae');
+  if (!keepAcc) s = stripAcc(s);
+  s = s.replace(/[^a-z0-9àâäçéèêëîïôöùûüÿ' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.replace(/^(l'|d'|l |d |le |la |les |un |une |des |du )/, '').replace(/^' ?/, '').trim();
+}
+function answerAlts(fr) {
+  const alts = [];
+  String(fr).split(/\s*\/\s*/).forEach((p) => {
+    const base = p.replace(/\([^)]*\)/g, ' ').trim(); if (base) alts.push(base);
+    (p.match(/\(([^)]*)\)/g) || []).forEach((x) => { const inner = x.slice(1, -1).trim(); if (inner) alts.push(inner); });
+    alts.push(p.replace(/[()]/g, ' '));
+  });
+  return alts;
+}
+function lev(a, b) {
+  const m = a.length, n = b.length; if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) { const cur = [i]; for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+  return prev[n];
+}
+function checkAnswer(input, fr) {
+  const inp = normAns(input), inpA = normAns(input, true); if (!inp) return { ok: false };
+  for (const alt of answerAlts(fr)) {
+    const a = normAns(alt), aA = normAns(alt, true); if (!a) continue;
+    if (inp === a) return { ok: true, accent: inpA !== aA };
+    const tol = a.length >= 10 ? 2 : a.length >= 5 ? 1 : 0;
+    if (lev(inp, a) <= tol) return { ok: true, typo: true };
+  }
+  return { ok: false };
+}
+function hintOf(fr) {
+  const main = String(fr).split(/\s*\/\s*/)[0].replace(/\([^)]*\)/g, '').trim();
+  const m = main.match(/^(l'|l’|le |la |les |un |une |des |du )?(.*)$/i); const art = m[1] || ''; const rest = m[2] || '';
+  return art + rest.slice(0, Math.max(2, Math.ceil(rest.length / 4))) + '…';
+}
 function gradeWord(id, ok) {
   const s = S.vocab[id] || { box: 0, due: today(), seen: 0, ok: 0, ko: 0 };
   s.seen++;
@@ -139,24 +176,23 @@ function gradeGrammar(i, ok) {
 function lastEntry() { return S.texts.length ? S.texts[S.texts.length - 1] : null; }
 function entryById(id) { return S.texts.find((e) => e.id === id); }
 function taskOf(e) { return TEXTS[e.kind].find((t) => t.id === e.taskId); }
-function todaysText() {
-  // renvoie {mode:'new'|'rewrite'|'done', entry?, kind?, task?}
-  const d = day();
-  if (d.textRef) {
-    const e = entryById(d.textRef.id);
-    if (e) return { mode: d.textRef.mode, entry: e, task: taskOf(e), kind: e.kind, done: d.t };
-  }
-  const L = lastEntry();
-  if (L && L.date < today() && L.status !== 'draft' && !L.skipRewrite && (!L.rewrite || L.rewrite.status === 'draft')) return { mode: 'rewrite', entry: L, task: taskOf(L), kind: L.kind, done: false };
-  if (L && L.status === 'draft' && L.date < today()) return { mode: 'new', entry: L, task: taskOf(L), kind: L.kind, done: false };
-  const kind = KIND_ORDER[S.kindTurn % KIND_ORDER.length];
-  const list = TEXTS[kind]; const task = list[S.kindNext[kind] % list.length];
-  return { mode: 'new', kind, task, done: false };
+function pairInfo(k) {
+  k = k || today();
+  const dd = Math.max(0, Math.round((parseKey(k) - parseKey(S.created || k)) / 86400000));
+  const n = Math.floor(dd / 2); const kind = KIND_ORDER[n % KIND_ORDER.length]; const list = TEXTS[kind];
+  return { n, dayB: dd % 2 === 1, kind, task: list[Math.floor(n / KIND_ORDER.length) % list.length] };
 }
-function startNewEntry(kind, task) {
-  const e = { id: 'e' + Date.now().toString(36), kind, taskId: task.id, date: today(), draft: '', status: 'draft', correction: '', score: null, words: [], seconds: 0 };
-  S.texts.push(e); S.kindNext[kind]++; S.kindTurn++;
-  day().textRef = { id: e.id, mode: 'new' }; save(); return e;
+function todaysText() {
+  // chaque texte dure 2 jours : jour 1 on l'écrit, jour 2 on le réécrit après la correction
+  const p = pairInfo(); const e = S.texts.find((x) => x.pair === p.n);
+  const base = { kind: p.kind, task: p.task, pair: p.n, dayB: p.dayB };
+  if (!e) return Object.assign(base, { mode: 'new' });
+  if (e.status === 'draft' || !p.dayB || e.date === today()) return Object.assign(base, { mode: 'new', entry: e });
+  return Object.assign(base, { mode: 'rewrite', entry: e });
+}
+function startNewEntry(kind, task, pair) {
+  const e = { id: 'e' + Date.now().toString(36), kind, taskId: task.id, pair, date: today(), draft: '', status: 'draft', correction: '', score: null, words: [], seconds: 0 };
+  S.texts.push(e); save(); return e;
 }
 function claudePrompt(e, isRewrite) {
   const t = taskOf(e);
@@ -283,8 +319,8 @@ VIEWS.home = () => {
   const doneCount = [d.v, d.g, d.t].filter(Boolean).length;
   const vocabDue = allWords().filter((w) => isDue(w.id)).length;
   const textSub = tt.mode === 'rewrite'
-    ? (tt.entry.status === 'sent' ? 'Colle d’abord la correction de Claude' : esc(tt.task.titre) + ' · version 2')
-    : esc(KIND_LABEL[tt.kind]) + ' · ' + esc(tt.task.titre);
+    ? 'Jour 2 · ' + (tt.entry.status === 'sent' ? 'colle d’abord la correction de Claude' : esc(tt.task.titre))
+    : (tt.dayB ? 'Jour 2 · ' : 'Jour 1 · ') + esc(KIND_LABEL[tt.kind]) + ' · ' + esc(tt.task.titre);
   const mission = (act, ico, bg, title, sub, done, active) => `<button class="mission ${active ? 'active' : ''}" data-act="${act}"><div class="mico" style="background:${bg}">${ico}</div><div style="flex:1;min-width:0"><div class="mtitle">${title}</div><div class="msub">${sub}</div></div>${done ? `<div class="check">${ICON.check()}</div>` : active ? '<span class="go">Go</span>' : ICON.chev()}</button>`;
   const firstTodo = !d.v ? 'v' : !d.g ? 'g' : !d.t ? 't' : null;
   let missions = mission('startVocab', ICON.cards('#1E7A4E'), 'var(--green-soft)', 'Vocabulaire', `${S.vocabSize} mots · ${plur(Math.min(vocabDue, S.vocabSize), 'révision')}`, d.v, firstTodo === 'v')
@@ -318,40 +354,60 @@ VIEWS.home = () => {
   <div class="row small mt12" style="gap:8px">${ICON.flag()}<span>Objectif : examen d'État de traductrice FR/DE · spécialité droit</span></div>`;
 };
 
-/* --- Session de vocabulaire --- */
+/* --- Session de vocabulaire (réponse écrite) --- */
 function startVocab(onlyIds, after) {
   const words = buildVocabSession(S.vocabSize, onlyIds);
   if (!words.length) { toast('Aucun mot à réviser'); return; }
-  const qs = words.map((w) => makeVocabQuestion(w));
-  go('vocab', { qs, i: 0, picked: null, right: 0, missed: [], retry: false, after: after || null, firstTotal: qs.length });
+  const qs = words.map((w) => { const s = wstate(w.id); return { word: w, isNew: !s, last: s ? s.last : null }; });
+  go('vocab', { qs, i: 0, res: null, hint: false, right: 0, missed: [], retry: false, after: after || null, firstTotal: qs.length });
+}
+function typedBody(q, nextLabel, nextAct) {
+  const w = q.word; const r = UI.res;
+  let html = `<div class="card mt12 col" style="padding:22px 20px;gap:10px"><span class="label">Allemand → français</span><span style="font-size:28px;font-weight:900;line-height:1.15">${esc(w.de)}</span></div>`;
+  if (!r) {
+    html += `<form data-form="check" class="mt16" autocomplete="off">
+      <label for="ans" class="h3" style="display:block;margin-bottom:8px">Écris l'équivalent en français</label>
+      <input type="text" id="ans" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Ta réponse…" style="font-size:18px">
+      ${UI.hint ? `<div class="small mt8">Indice : « ${esc(hintOf(w.fr))} »</div>` : ''}
+      <button type="submit" class="btn mt12">Valider</button></form>
+      <div class="grid2 mt8"><button class="btn ghost sm" data-act="hintWord" ${UI.hint ? 'disabled' : ''}>Indice</button><button class="btn ghost sm" data-act="dunnoWord">Je ne sais pas</button></div>
+      <p class="small mt8" style="text-align:center">L'article (le, la, l') est facultatif.</p>`;
+  } else {
+    const ok = r.ok;
+    html += `<div class="mt16" style="border:2px solid ${ok ? 'var(--green)' : 'var(--red)'};background:${ok ? 'var(--green-soft)' : 'var(--red-soft)'};border-radius:14px;padding:12px 14px;font-size:18px;font-weight:700;min-height:52px">${r.typed ? esc(r.typed) : '<span class="muted">(pas de réponse)</span>'}</div>`;
+    html += `<div class="feedback ${ok ? 'ok' : 'ko'} mt12"><b>${ok ? (r.override ? 'Réponse acceptée' : 'Exact !') + (r.xp ? ' +' + r.xp + ' XP' : '') : 'Réponse attendue'}</b><span><b style="font-size:15px">${esc(w.fr)}</b>${r.accent ? '<br>Attention aux accents.' : ''}${r.typo ? '<br>Presque : vérifie l’orthographe.' : ''}${w.note ? '<br>' + esc(w.note) : ''}</span></div>`;
+    if (!ok && r.typed) html += `<div class="mt8"><button class="btn ghost sm" data-act="overrideWord">Ma réponse était juste</button></div>`;
+    html += `<div class="mt12"><button class="btn" data-act="${nextAct}">${nextLabel}</button></div>`;
+  }
+  return html;
+}
+function gradeTyped(typed) {
+  const w = UI.qs[UI.i].word; const c = typed ? checkAnswer(typed, w.fr) : { ok: false };
+  UI.snap = S.vocab[w.id] ? JSON.stringify(S.vocab[w.id]) : null;
+  UI.res = { typed, ok: c.ok, accent: c.accent, typo: c.typo, xp: 0 };
+  applyResult(c.ok); save(); render();
+}
+function applyResult(ok) {
+  const w = UI.qs[UI.i].word; const r = UI.res;
+  if (UI.view === 'test') {
+    if (ok) { r.xp = 2 * XP.vocab; addXP(r.xp); UI.right++; }
+    else if (S.vocab[w.id]) { S.vocab[w.id].box = 1; S.vocab[w.id].due = today(); }
+    return;
+  }
+  if (UI.retry) return;
+  gradeWord(w.id, ok); S.vocab[w.id].last = today();
+  if (ok) { r.xp = UI.hint ? XP.hint : XP.vocab; addXP(r.xp); UI.gained = (UI.gained || 0) + r.xp; UI.right++; } else UI.missed.push(w);
 }
 VIEWS.vocab = () => {
-  const q = UI.qs[UI.i]; const n = UI.qs.length; const w = q.word; const s = wstate(w.id);
+  const q = UI.qs[UI.i]; const n = UI.qs.length; const w = q.word;
   const tags = [];
   if (UI.retry) tags.push('<span class="tag red">Deuxième chance</span>');
   else if (q.isNew) tags.push('<span class="tag green">Nouveau mot</span>');
   else { const ago = q.last ? Math.round((parseKey(today()) - parseKey(q.last)) / 86400000) : 0; tags.push(`<span class="tag amber">Révision${ago > 0 ? ' · vu il y a ' + ago + ' j' : ''}</span>`); }
   tags.push(`<span class="tag indigo">${esc(w.theme === 'perso' ? 'Mes mots' : THEMES[w.theme])}</span>`);
-  const opts = q.options.map((o, k) => {
-    let cls = ''; if (UI.picked !== null) { if (k === q.answer) cls = 'ok'; else if (k === UI.picked) cls = 'ko'; }
-    return `<button class="option ${cls}" data-act="pickVocab" data-arg="${k}" ${UI.picked !== null ? 'disabled' : ''}><span class="letter">${'ABCD'[k]}</span><span style="flex:1">${esc(o)}</span></button>`;
-  }).join('');
-  let fb = '';
-  if (UI.picked !== null) {
-    const ok = UI.picked === q.answer;
-    const pair = `<b>${esc(w.de)}</b> = ${esc(w.fr)}`;
-    fb = `<div class="feedback ${ok ? 'ok' : 'ko'} mt12"><b>${ok ? 'Exact !' + (UI.retry ? '' : ' +' + XP.vocab + ' XP') : 'Pas tout à fait'}</b><span>${ok ? '' : pair + '<br>'}${esc(w.note)}</span></div>`;
-  }
   return `${progressHead(UI.i, n, 'var(--green)')}
   <div class="row mt16" style="flex-wrap:wrap;gap:6px">${tags.join('')}</div>
-  <div class="card mt12 col" style="padding:22px 20px;gap:10px">
-    <span class="label">${q.dir === 'de_fr' ? 'Allemand → français' : 'Français → allemand'}</span>
-    <span style="font-size:28px;font-weight:900;line-height:1.15">${esc(q.prompt)}</span>
-  </div>
-  <div class="h3 mt16">${q.dir === 'de_fr' ? 'Quel est l\'équivalent en français ?' : 'Quel est l\'équivalent en allemand ?'}</div>
-  <div class="col mt8">${opts}</div>
-  ${fb}
-  <div class="mt16">${UI.picked === null ? '<button class="btn" disabled>Choisis une réponse</button>' : `<button class="btn" data-act="nextVocab">${UI.i + 1 < n ? 'Continuer' : 'Terminer'}</button>`}</div>`;
+  ${typedBody(q, UI.i + 1 < n ? 'Continuer' : 'Terminer', 'nextVocab')}`;
 };
 
 /* --- Session de grammaire --- */
@@ -381,9 +437,9 @@ function startTest() {
   const seen = allWords().filter((w) => wstate(w.id));
   let pool = shuffle(seen).slice(0, 20);
   if (pool.length < 20) pool = pool.concat(shuffle(allWords().filter((w) => !wstate(w.id))).slice(0, 20 - pool.length));
-  const qs = pool.map((w) => ({ type: 'v', q: makeVocabQuestion(w, Math.random() < 0.5 ? 'de_fr' : 'fr_de') }))
+  const qs = pool.map((w) => ({ type: 'v', word: w }))
     .concat(buildGrammarSession(5).map((gi) => ({ type: 'g', gi })));
-  go('test', { qs, i: 0, picked: null, right: 0 });
+  go('test', { qs, i: 0, picked: null, res: null, hint: false, right: 0 });
 }
 VIEWS.test = () => {
   const item = UI.qs[UI.i]; const n = UI.qs.length;
@@ -392,17 +448,8 @@ VIEWS.test = () => {
     UI = Object.assign({}, saved, sub); const html = VIEWS.grammar().replace('data-act="nextGrammar"', 'data-act="nextTest"').replace(/data-act="pickGrammar"/g, 'data-act="pickTest"'); UI = saved;
     return `<div class="row" style="margin-bottom:6px"><span class="tag plum">Test du dimanche</span></div>` + html;
   }
-  const q = item.q;
-  const opts = q.options.map((o, k) => {
-    let cls = ''; if (UI.picked !== null) { if (k === q.answer) cls = 'ok'; else if (k === UI.picked) cls = 'ko'; }
-    return `<button class="option ${cls}" data-act="pickTest" data-arg="${k}" ${UI.picked !== null ? 'disabled' : ''}><span class="letter">${'ABCD'[k]}</span><span style="flex:1">${esc(o)}</span></button>`;
-  }).join('');
-  let fb = '';
-  if (UI.picked !== null) { const ok = UI.picked === q.answer; fb = `<div class="feedback ${ok ? 'ok' : 'ko'} mt12"><b>${ok ? 'Exact ! +' + 2 * XP.vocab + ' XP' : esc(q.word.de) + ' = ' + esc(q.word.fr)}</b>${q.word.note ? `<span>${esc(q.word.note)}</span>` : ''}</div>`; }
   return `<div class="row" style="margin-bottom:6px"><span class="tag plum">Test du dimanche</span></div>${progressHead(UI.i, n, 'var(--plum)')}
-  <div class="card mt16 col" style="padding:22px 20px;gap:10px"><span class="label">${q.dir === 'de_fr' ? 'Allemand → français' : 'Français → allemand'}</span><span style="font-size:28px;font-weight:900;line-height:1.15">${esc(q.prompt)}</span></div>
-  <div class="col mt16">${opts}</div>${fb}
-  <div class="mt16">${UI.picked === null ? '<button class="btn" disabled>Choisis une réponse</button>' : `<button class="btn" data-act="nextTest">${UI.i + 1 < n ? 'Continuer' : 'Voir mon score'}</button>`}</div>`;
+  ${typedBody(item, UI.i + 1 < n ? 'Continuer' : 'Voir mon score', 'nextTest')}`;
 };
 
 /* --- Écran de récompense --- */
@@ -427,14 +474,13 @@ function finish(kind, stats, title, sub, next) {
 
 /* --- Texte du jour --- */
 function openText() {
-  const tt = todaysText();
+  const tt = todaysText(); const e = tt.entry;
   if (tt.mode === 'rewrite') {
-    const e = tt.entry;
+    if (e.rewrite && e.rewrite.status && e.rewrite.status !== 'draft') return go('sendClaude', { id: e.id, rewrite: true });
     if (e.status === 'sent') return go('paste', { id: e.id, forRewrite: true });
     return go('rewrite', { id: e.id, step: (e.words && e.words.length && !(e.rewrite && e.rewrite.learned)) ? 'learn' : 'write' });
   }
-  let e = tt.entry;
-  if (!e) { go('textIntro', { kind: tt.kind, taskId: tt.task.id }); return; }
+  if (!e) return go('textIntro', { kind: tt.kind, taskId: tt.task.id, pair: tt.pair, dayB: tt.dayB });
   if (e.status === 'draft') return go('write', { id: e.id });
   return go('sendClaude', { id: e.id, rewrite: false });
 }
@@ -443,7 +489,7 @@ VIEWS.textIntro = () => {
   return `${topBar('Texte du jour', 'home')}
   <div class="row mt12" style="flex-wrap:wrap;gap:6px"><span class="tag ${isTrad ? 'plum' : 'amber'}">${esc(KIND_LABEL[UI.kind])}</span>${isTrad ? '<span class="tag indigo">Mode examen · sans dictionnaire</span>' : ''}</div>
   <div class="card mt12 col"><span class="label">${esc(task.titre)}</span>${task.consigne ? `<span class="source">${esc(task.consigne)}</span>` : `<span class="muted small">Le texte à traduire s'affiche quand tu commences. Un chrono démarre, comme à l'examen.</span>`}</div>
-  <div class="card mt12 row" style="gap:12px">${marmot(56)}<span class="small" style="flex:1;line-height:1.45">Rythme : aujourd'hui un nouveau texte, demain sa réécriture après la correction de Claude.</span></div>
+  <div class="card mt12 row" style="gap:12px">${marmot(56)}<span class="small" style="flex:1;line-height:1.45">${UI.dayB ? "Ce texte était prévu hier : écris-le aujourd'hui. Demain, un nouveau texte arrive." : "Chaque texte dure 2 jours : aujourd'hui tu l'écris, demain tu le réécris après la correction de Claude. Ça laisse le temps d'apprendre le vocabulaire."}</span></div>
   <div class="mt20"><button class="btn" data-act="beginText">Commencer</button></div>
   ${S.texts.length ? '' : '<p class="small mt12" style="text-align:center">Astuce : tu peux écrire en plusieurs fois, le brouillon est gardé.</p>'}`;
 };
@@ -483,7 +529,7 @@ VIEWS.paste = () => {
   <div class="mt16"><button class="btn" data-act="savePaste">Enregistrer la correction</button></div>
   ${isRw ? '<div class="mt8"><button class="btn ghost sm" data-act="skipRwCorrection">Pas de correction pour la réécriture</button></div>' : ''}
   ${!isRw && !UI.forRewrite ? `<div class="mt8"><button class="btn ghost sm" data-act="ignoreCorrection">Je n'aurai pas de correction pour ce texte</button></div>` : ''}
-  ${UI.forRewrite ? `<div class="mt8"><button class="btn ghost sm" data-act="skipRewrite" data-arg="${e.id}">Passer la réécriture, faire un nouveau texte</button></div>` : ''}`;
+  ${UI.forRewrite ? `<div class="mt8"><button class="btn ghost sm" data-act="skipToRewrite">Réécrire sans correction</button></div>` : ''}`;
 };
 VIEWS.correction = () => {
   const e = entryById(UI.id); const isRw = UI.rw; const corr = isRw ? e.rewrite.correction : e.correction; const score = isRw ? e.rewrite.score : e.score;
@@ -510,7 +556,7 @@ VIEWS.rewrite = () => {
   return `${topBar('Réécriture', 'home')}
   <div class="row mt8" style="flex-wrap:wrap;gap:6px"><span class="tag amber">Jour B · réécriture</span><span class="tag indigo">${esc(t.titre)}</span></div>
   <div class="card mt12 col"><span class="label">${t.source ? 'Texte source' : 'Consigne'}</span><span class="source">${esc(t.source || t.consigne)}</span></div>
-  <details class="mt8"><summary>Jeter un œil à ma correction</summary><div class="card prewrap">${esc(e.correction)}</div></details>
+  ${e.correction ? `<details class="mt8"><summary>Jeter un œil à ma correction</summary><div class="card prewrap">${esc(e.correction)}</div></details>` : `<details class="mt8"><summary>Revoir mon premier texte</summary><div class="card prewrap">${esc(e.draft)}</div></details>`}
   <label for="rwdraft" class="small mt12" style="display:block;font-weight:800;margin-bottom:8px">Ta nouvelle version</label>
   <textarea id="rwdraft" class="write" data-input="rwdraft" placeholder="Réécris ton texte sans copier la correction…">${esc(rw.draft)}</textarea>
   <div class="between small mt8"><span id="wc">${wordCount(rw.draft)} mots</span><span>Brouillon enregistré</span></div>
@@ -621,7 +667,7 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">LexRhin · version 1.4</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.5</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
@@ -632,6 +678,7 @@ function render() {
   const showTabs = TAB_VIEWS.includes(v);
   $('#app').classList.toggle('no-tabs', !showTabs);
   $('#tabbar').innerHTML = showTabs ? `<div class="tabbar"><nav>${[['home', 'Accueil', ICON.home()], ['lexique', 'Lexique', ICON.book()], ['progres', 'Progrès', ICON.chart()], ['profil', 'Profil', ICON.user()]].map(([k, l, ic]) => `<button class="tab ${v === k ? 'on' : ''}" data-act="nav" data-arg="${k}">${ic}${l}</button>`).join('')}</nav></div>` : '';
+  if ((v === 'vocab' || v === 'test') && !UI.res) { const a = $('#ans'); if (a) { try { a.focus({ preventScroll: true }); } catch (e) { } } }
   if (v === 'write') { // chrono pour les traductions
     const e = entryById(UI.id);
     if (e && e.kind !== 'redaction') timerHandle = setInterval(() => { e.seconds = (e.seconds || 0) + 1; const el = $('#timer'); if (el) el.textContent = fmtTime(e.seconds); if (e.seconds % 15 === 0) save(); }, 1000);
@@ -643,17 +690,23 @@ const ACT = {
   nav: (a) => go(a),
   quit: () => go('home'),
   startVocab: () => { if (day().v) toast('Vocabulaire déjà fait : séance bonus'); startVocab(); },
-  pickVocab: (a) => { if (UI.picked !== null) return; UI.picked = +a; const q = UI.qs[UI.i]; const ok = UI.picked === q.answer;
-    if (!UI.retry) { gradeWord(q.word.id, ok); S.vocab[q.word.id].last = today(); if (ok) { UI.right++; addXP(XP.vocab); } else UI.missed.push(q.word); }
-    save(); render(); },
+  checkWord: () => { if (UI.res) return; const inp = $('#ans'); const typed = (inp ? inp.value : '').trim(); if (!typed) return toast('Écris une réponse ou appuie sur « Je ne sais pas »'); gradeTyped(typed); },
+  dunnoWord: () => { if (UI.res) return; gradeTyped(''); },
+  hintWord: () => { const inp = $('#ans'); const v = inp ? inp.value : ''; UI.hint = true; render(); const i2 = $('#ans'); if (i2) { i2.value = v; try { i2.focus(); } catch (e) { } } },
+  overrideWord: () => {
+    const r = UI.res; if (!r || r.ok) return; const w = UI.qs[UI.i].word;
+    if (UI.view === 'test' || !UI.retry) { if (UI.snap) S.vocab[w.id] = JSON.parse(UI.snap); else delete S.vocab[w.id]; }
+    UI.missed = (UI.missed || []).filter((x) => x.id !== w.id);
+    r.ok = true; r.override = true; applyResult(true); save(); render();
+  },
   nextVocab: () => {
-    if (UI.i + 1 < UI.qs.length) { UI.i++; UI.picked = null; return render(); }
+    if (UI.i + 1 < UI.qs.length) { UI.i++; UI.res = null; UI.hint = false; return render(); }
     if (UI.missed.length && !UI.retry) { // deuxième chance pour les mots ratés
-      UI.qs = UI.missed.map((w) => makeVocabQuestion(w, 'de_fr')); UI.i = 0; UI.picked = null; UI.retry = true; return render();
+      UI.qs = UI.missed.map((w) => ({ word: w })); UI.i = 0; UI.res = null; UI.hint = false; UI.retry = true; return render();
     }
     if (UI.after) return UI.after();
     const right = UI.right; const all = UI.firstTotal;
-    finish('v', [{ v: '+' + right * XP.vocab, l: 'XP', gold: true }, { v: right + '/' + all, l: 'du premier coup' }, { v: allWords().filter((w) => (wstate(w.id) || {}).box >= 3).length, l: 'mots acquis' }], 'Vocabulaire terminé !', 'Les mots ratés reviendront demain.', !day().g ? { act: 'startGrammar', label: 'Enchaîner avec la grammaire' } : !day().t ? { act: 'openText', label: 'Passer au texte du jour' } : null);
+    finish('v', [{ v: '+' + (UI.gained || 0), l: 'XP', gold: true }, { v: right + '/' + all, l: 'du premier coup' }, { v: allWords().filter((w) => (wstate(w.id) || {}).box >= 3).length, l: 'mots acquis' }], 'Vocabulaire terminé !', 'Les mots ratés reviendront demain.', !day().g ? { act: 'startGrammar', label: 'Enchaîner avec la grammaire' } : !day().t ? { act: 'openText', label: 'Passer au texte du jour' } : null);
   },
   startGrammar: () => { if (day().g) toast('Grammaire déjà faite : séance bonus'); startGrammar(); },
   pickGrammar: (a) => { if (UI.picked !== null) return; UI.picked = +a; const gi = UI.qs[UI.i]; const ok = UI.picked === GRAMMAR[gi].a; gradeGrammar(gi, ok); if (ok) { UI.right++; addXP(XP.grammar); } save(); render(); },
@@ -666,16 +719,16 @@ const ACT = {
     if (UI.picked !== null) return; UI.picked = +a; const item = UI.qs[UI.i];
     let ok;
     if (item.type === 'g') { ok = UI.picked === GRAMMAR[item.gi].a; gradeGrammar(item.gi, ok); if (ok) addXP(2 * XP.grammar); }
-    else { ok = UI.picked === item.q.answer; if (ok) addXP(2 * XP.vocab); else if (S.vocab[item.q.word.id]) { S.vocab[item.q.word.id].box = 1; S.vocab[item.q.word.id].due = today(); } }
+    else return;
     if (ok) UI.right++; save(); render();
   },
   nextTest: () => {
-    if (UI.i + 1 < UI.qs.length) { UI.i++; UI.picked = null; return render(); }
+    if (UI.i + 1 < UI.qs.length) { UI.i++; UI.picked = null; UI.res = null; UI.hint = false; return render(); }
     S.tests.push({ date: today(), score: UI.right, total: UI.qs.length }); day().test = true; save();
     go('bravo', { b: { title: 'Test terminé : ' + UI.right + '/' + UI.qs.length, sub: UI.right >= 20 ? 'Superbe semaine !' : UI.right >= 15 ? 'Très bien, continue comme ça.' : 'Les mots ratés reviennent en révision dès demain.', stats: [{ v: UI.right + '/' + UI.qs.length, l: 'score', gold: true }, { v: S.tests.length, l: 'tests passés' }, { v: totalStars(), l: 'étoiles' }], newStar: false, next: null } });
   },
   openText: () => openText(),
-  beginText: () => { const e = startNewEntry(UI.kind, TEXTS[UI.kind].find((t) => t.id === UI.taskId)); go('write', { id: e.id }); },
+  beginText: () => { const e = startNewEntry(UI.kind, TEXTS[UI.kind].find((t) => t.id === UI.taskId), UI.pair); go('write', { id: e.id }); },
   finishText: () => {
     const e = entryById(UI.id); if (wordCount(e.draft) < 10) return toast('Écris au moins quelques phrases');
     e.status = 'sent'; e.sentAt = today(); const d = day(); if (!d.textRef) d.textRef = { id: e.id, mode: 'new' };
@@ -699,7 +752,7 @@ const ACT = {
   },
   ignoreCorrection: () => { const e = entryById(UI.id); e.status = 'corrected'; e.noCorrection = true; e.skipRewrite = true; save(); toast('Texte classé sans correction'); go('home'); },
   skipRwCorrection: () => { const e = entryById(UI.id); e.rewrite.status = 'corrected'; e.rewrite.skipped = true; save(); go('home'); },
-  skipRewrite: (a) => { const e = entryById(a); e.skipRewrite = true; if (day().textRef && day().textRef.id === e.id) delete day().textRef; save(); openText(); },
+  skipToRewrite: () => { const e = entryById(UI.id); e.status = 'corrected'; e.noCorrection = true; save(); go('rewrite', { id: e.id, step: 'write' }); },
   learnRewriteWords: () => { const id = UI.id; const e = entryById(id); startVocab(e.words, () => { e.rewrite = Object.assign(e.rewrite || { draft: '', status: 'draft' }, { learned: true }); save(); go('rewrite', { id, step: 'write' }); }); },
   rewriteWrite: () => { const e = entryById(UI.id); e.rewrite = Object.assign(e.rewrite || { draft: '', status: 'draft' }, { learned: true }); save(); go('rewrite', { id: e.id, step: 'write' }); },
   finishRewrite: () => {
@@ -749,6 +802,9 @@ document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]'); if (!el) return;
   const fn = ACT[el.dataset.act]; if (!fn) return;
   ev.preventDefault(); fn(el.dataset.arg);
+});
+document.addEventListener('submit', (ev) => {
+  const f = ev.target; if (f && f.dataset && f.dataset.form === 'check') { ev.preventDefault(); ACT.checkWord(); }
 });
 document.addEventListener('input', (ev) => {
   const el = ev.target; const k = el.dataset && el.dataset.input; if (!k) return;
