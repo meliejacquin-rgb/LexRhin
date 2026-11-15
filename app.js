@@ -1,4 +1,4 @@
-/* Passerelle — appli d'entraînement au français juridique (examen de traductrice FR/DE)
+/* LexRhin — appli d'entraînement au français juridique (examen de traductrice FR/DE)
    Tout est stocké sur le téléphone (localStorage). Sauvegarde/restauration dans « Profil ». */
 'use strict';
 
@@ -228,7 +228,7 @@ const ICON = {
   chart: () => `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path></svg>`,
   user: () => `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>`
 };
-const LOGO = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 100 100" role="img" aria-label="Logo Passerelle"><rect width="100" height="100" rx="22" fill="#F5B301"></rect><text x="50" y="62" text-anchor="middle" font-family="Nunito, Inter, system-ui, sans-serif" font-weight="900" font-size="58" fill="#1F2147">§</text><path d="M18 80 q8 -6 16 0 t16 0 t16 0 t16 0" fill="none" stroke="#1F2147" stroke-width="4.5" stroke-linecap="round"></path></svg>`;
+const LOGO = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 100 100" role="img" aria-label="Logo LexRhin"><rect width="100" height="100" rx="22" fill="#F5B301"></rect><text x="50" y="62" text-anchor="middle" font-family="Nunito, Inter, system-ui, sans-serif" font-weight="900" font-size="58" fill="#1F2147">§</text><path d="M18 80 q8 -6 16 0 t16 0 t16 0 t16 0" fill="none" stroke="#1F2147" stroke-width="4.5" stroke-linecap="round"></path></svg>`;
 
 function marmot(size, mood) {
   const ears = '<circle cx="36" cy="24" r="9" fill="#7A4F31"/><circle cx="84" cy="24" r="9" fill="#7A4F31"/><circle cx="36" cy="24" r="4.5" fill="#E9CFAE"/><circle cx="84" cy="24" r="4.5" fill="#E9CFAE"/>';
@@ -297,7 +297,7 @@ VIEWS.home = () => {
 
   return `
   <div class="between">
-    <div class="row">${LOGO(36)}<span style="font-size:18px;font-weight:900">Passerelle</span></div>
+    <div class="row">${LOGO(36)}<span style="font-size:20px;font-weight:900;letter-spacing:-0.01em">Lex<span style="color:var(--indigo-text)">Rhin</span></span></div>
     <div class="row" style="gap:8px"><span class="pill">${ICON.star(18)}${totalStars()}</span><span class="pill">${ICON.flame(18)}${st} j</span></div>
   </div>
   <div class="card mt12 row" style="gap:12px">
@@ -616,12 +616,12 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
   </div>
   <div class="card mt12 col">
     <span class="h3">Installer sur l'iPhone</span>
-    <span class="small" style="line-height:1.45">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». Passerelle s'ouvre alors comme une vraie appli, même hors connexion.</span>
+    <span class="small" style="line-height:1.45">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». LexRhin s'ouvre alors comme une vraie appli, même hors connexion.</span>
   </div>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">Passerelle · version 1.1</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.2</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
@@ -719,10 +719,10 @@ const ACT = {
   month: (a) => { UI.month = a; render(); },
   vsize: (a) => { S.vocabSize = +a; save(); render(); },
   exportData: async () => {
-    const json = JSON.stringify(S); const name = 'passerelle-sauvegarde-' + today() + '.json';
+    const json = JSON.stringify(S); const name = 'lexrhin-sauvegarde-' + today() + '.json';
     try {
       const file = new File([json], name, { type: 'application/json' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'Sauvegarde Passerelle' }); return; }
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'Sauvegarde LexRhin' }); return; }
     } catch (e) { if (e && e.name === 'AbortError') return; }
     try { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); toast('Sauvegarde téléchargée'); }
     catch (e) { copy(json); }

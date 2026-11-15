@@ -1,4 +1,4 @@
-/* Passerelle — contenu pédagogique
+/* LexRhin — contenu pédagogique
    VOCAB : [allemand, français, remarque, thème]
    Les identifiants sont calculés à partir du terme allemand : on peut ajouter des
    mots à la fin sans perdre la progression. */
