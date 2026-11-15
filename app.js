@@ -31,13 +31,16 @@ const LEVELS = [
 const KIND_ORDER = ['essai', 'gen_fr_de', 'jur_fr_de', 'gen_de_fr', 'jur_de_fr'];
 const KIND_LABEL = {
   essai: 'Épreuve 1 · Essai en français', gen_fr_de: 'Épreuve 2 · Texte général FR → DE', jur_fr_de: 'Épreuve 3 · Texte juridique FR → DE',
-  gen_de_fr: 'Épreuve 4 · Texte général DE → FR', jur_de_fr: 'Épreuve 5 · Texte juridique DE → FR',
+  gen_de_fr: 'Épreuve 4 · Texte général DE → FR', jur_de_fr: 'Épreuve 5 · Texte juridique DE → FR', consult: 'Consultation · réponse à un client',
   redaction: 'Rédaction en français', trad_de_fr: 'Traduction allemand → français', trad_fr_de: 'Traduction français → allemand'
 };
-const KIND_SHORT = { essai: 'Essai en français', gen_fr_de: 'Traduction FR → DE (général)', jur_fr_de: 'Traduction FR → DE (juridique)', gen_de_fr: 'Traduction DE → FR (général)', jur_de_fr: 'Traduction DE → FR (juridique)', redaction: 'Rédaction', trad_de_fr: 'Traduction DE → FR', trad_fr_de: 'Traduction FR → DE' };
-const KIND_INFO = { essai: { mins: 180, into: 'fr' }, gen_fr_de: { mins: 90, from: 'fr', into: 'de' }, jur_fr_de: { mins: 90, from: 'fr', into: 'de' }, gen_de_fr: { mins: 90, from: 'de', into: 'fr' }, jur_de_fr: { mins: 90, from: 'de', into: 'fr' }, redaction: { into: 'fr' }, trad_de_fr: { from: 'de', into: 'fr' }, trad_fr_de: { from: 'fr', into: 'de' } };
+const KIND_SHORT = { consult: 'Consultation', essai: 'Essai en français', gen_fr_de: 'Traduction FR → DE (général)', jur_fr_de: 'Traduction FR → DE (juridique)', gen_de_fr: 'Traduction DE → FR (général)', jur_de_fr: 'Traduction DE → FR (juridique)', redaction: 'Rédaction', trad_de_fr: 'Traduction DE → FR', trad_fr_de: 'Traduction FR → DE' };
+const KIND_INFO = { consult: { mins: 45, into: 'fr' }, essai: { mins: 180, into: 'fr' }, gen_fr_de: { mins: 90, from: 'fr', into: 'de' }, jur_fr_de: { mins: 90, from: 'fr', into: 'de' }, gen_de_fr: { mins: 90, from: 'de', into: 'fr' }, jur_de_fr: { mins: 90, from: 'de', into: 'fr' }, redaction: { into: 'fr' }, trad_de_fr: { from: 'de', into: 'fr' }, trad_fr_de: { from: 'fr', into: 'de' } };
 const DOM_LABEL = { prive: 'Droit privé', penal: 'Droit pénal', public: 'Droit public' };
 const isTradKind = (k) => !!(KIND_INFO[k] || {}).from;
+// Rotation du texte du jour : une consultation client un texte sur deux, les épreuves d'examen entre les deux
+const DAY_ORDER = ['consult', 'essai', 'consult', 'gen_fr_de', 'consult', 'jur_fr_de', 'consult', 'gen_de_fr', 'consult', 'jur_de_fr'];
+const ROLE_LABEL = { particulier: 'Particulier', notaire: 'Notaire', avocat: 'Avocat' };
 const XP = { vocab: 8, hint: 4, grammar: 10, text: 40, rewrite: 30 };
 
 /* ---------- État ---------- */
@@ -208,10 +211,12 @@ function tasksFor(kind) {
 function pairInfo(k) {
   k = k || today();
   const dd = Math.max(0, Math.round((parseKey(k) - parseKey(S.created || k)) / 86400000));
-  const n = Math.floor(dd / 2); const kind = KIND_ORDER[n % KIND_ORDER.length]; const list = tasksFor(kind);
-  const round = Math.floor(n / KIND_ORDER.length);
-  const topics = kind === 'essai' ? [0, 1, 2].map((i) => list[(round * 3 + i) % list.length]) : null;
-  return { n, dayB: dd % 2 === 1, kind, task: topics ? topics[0] : list[round % list.length], topics };
+  const n = Math.floor(dd / 2); const slot = n % DAY_ORDER.length; const kind = DAY_ORDER[slot]; const list = tasksFor(kind);
+  const round = Math.floor(n / DAY_ORDER.length);
+  const per = DAY_ORDER.filter((k) => k === kind).length; const occ = DAY_ORDER.slice(0, slot).filter((k) => k === kind).length;
+  const idx = round * per + occ;
+  const topics = kind === 'essai' ? [0, 1, 2].map((i) => list[(idx * 3 + i) % list.length]) : null;
+  return { n, dayB: dd % 2 === 1, kind, task: topics ? topics[0] : list[idx % list.length], topics };
 }
 function todaysText() {
   // chaque texte dure 2 jours : jour 1 on l'écrit, jour 2 on le réécrit après la correction
@@ -232,13 +237,15 @@ function claudePrompt(e, isRewrite) {
   const lines = ["Bonjour Claude ! Je prépare la Staatliche Prüfung für Übersetzer (Bade-Wurtemberg), langue française, spécialité droit. Ma langue maternelle est l'allemand.", ''];
   if (isRewrite) lines.push("Voici la réécriture de mon texte, après ta première correction. Dis-moi les erreurs qui restent.", '');
   lines.push('Exercice : ' + (KIND_LABEL[e.kind] || '') + ' — ' + t.titre + (e.mock ? ' (épreuve blanche, conditions d’examen)' : ''));
+  if (e.kind === 'consult') lines.push("Jeu de rôle : je suis avocate allemande (Rechtsanwältin). Un client français m'a écrit ; je lui réponds en français.", 'Message reçu de ' + t.expediteur + ' (objet : ' + t.objet + ') :', '"""', t.message, '"""');
   if (t.consigne) lines.push((e.kind === 'essai' ? 'Sujet : ' : 'Consigne : ') + t.consigne);
   if (t.source) lines.push('Texte source (' + (info.from === 'de' ? 'allemand' : 'français') + ') :', '"""', t.source, '"""');
   const draft = isRewrite ? e.rewrite.draft : e.draft;
   if (hand) lines.push('', (isRewrite ? 'Ma réécriture' : 'Mon texte') + " est manuscrit : il est sur la photo jointe. Commence par le transcrire fidèlement, sans rien corriger, puis corrige-le.", '');
-  else lines.push('', isRewrite ? 'Ma réécriture :' : (info.from ? 'Ma traduction :' : 'Mon texte :'), '"""', draft, '"""', '');
+  else lines.push('', isRewrite ? 'Ma réécriture :' : (info.from ? 'Ma traduction :' : e.kind === 'consult' ? 'Ma réponse :' : 'Mon texte :'), '"""', draft, '"""', '');
   lines.push("Évalue comme à l'examen : exactitude du sens, terminologie" + (e.kind && e.kind.startsWith('jur') ? ' juridique' : '') + ", correction de la langue, style et adaptation au type de texte" + (e.kind === 'essai' ? ', ainsi que le contenu, l’argumentation et la structure' : '') + '.');
   if (info.into === 'de') lines.push("La traduction est vers l'allemand, ma langue maternelle : sois exigeant sur le style et les tournures allemandes.");
+  if (e.kind === 'consult') lines.push("Pour cette consultation, évalue aussi : le registre (adapté à un " + (t.role === 'particulier' ? 'particulier, donc clair et sans jargon inutile' : 'confrère ' + t.role + ', donc technique et confraternel') + "), les formules d'appel et de politesse, la structure de la réponse, et surtout l'exactitude de mes indications en droit allemand (signale clairement toute erreur juridique ou toute omission importante).");
   lines.push('', 'Merci de répondre en respectant ce format :',
     '1. Ma version corrigée complète.',
     '2. Les erreurs, classées (grammaire, registre, lexique, sens), avec une explication courte pour chacune.',
@@ -357,7 +364,7 @@ VIEWS.home = () => {
   const vocabDue = allWords().filter((w) => isDue(w.id)).length;
   const textSub = tt.mode === 'rewrite'
     ? 'Jour 2 · ' + (tt.entry.status === 'sent' ? 'colle d’abord la correction de Claude' : esc(tt.task.titre))
-    : (tt.dayB ? 'Jour 2 · ' : 'Jour 1 · ') + esc(KIND_SHORT[tt.kind]) + ' · ' + (tt.kind === 'essai' && !tt.entry ? '3 sujets au choix' : esc(tt.task.titre));
+    : (tt.dayB ? 'Jour 2 · ' : 'Jour 1 · ') + esc(KIND_SHORT[tt.kind]) + ' · ' + (tt.kind === 'essai' && !tt.entry ? '3 sujets au choix' : tt.kind === 'consult' ? esc(ROLE_LABEL[tt.task.role]) + ' · ' + esc(tt.task.titre) : esc(tt.task.titre));
   const mission = (act, ico, bg, title, sub, done, active) => `<button class="mission ${active ? 'active' : ''}" data-act="${act}"><div class="mico" style="background:${bg}">${ico}</div><div style="flex:1;min-width:0"><div class="mtitle">${title}</div><div class="msub">${sub}</div></div>${done ? `<div class="check">${ICON.check()}</div>` : active ? '<span class="go">Go</span>' : ICON.chev()}</button>`;
   const firstTodo = !d.v ? 'v' : !d.g ? 'g' : !d.t ? 't' : null;
   let missions = mission('startVocab', ICON.cards('#1E7A4E'), 'var(--green-soft)', 'Vocabulaire', `${S.vocabSize} mots · ${plur(Math.min(vocabDue, S.vocabSize), 'révision')}${S.focusSucc !== false ? ' · ★ successions' : ''}`, d.v, firstTodo === 'v')
@@ -593,6 +600,7 @@ function lineCount(t) { return Math.max(1, Math.round(String(t || '').length / 6
 function targetMinutes(kind, task, mock) {
   if (mock) return (KIND_INFO[kind] || {}).mins || 90;
   if (kind === 'essai') return 60;
+  if (kind === 'consult') return 45;
   return task && task.source ? Math.max(5, lineCount(task.source) * 3) : 30;
 }
 VIEWS.textIntro = () => {
@@ -608,6 +616,14 @@ VIEWS.textIntro = () => {
     <p class="small mt12" style="line-height:1.45">${exam} ${UI.mock ? 'Chrono : 180 minutes.' : 'Objectif ici : environ 60 minutes.'}</p>`;
   }
   const task = TEXTS[kind].find((t) => t.id === UI.taskId);
+  if (kind === 'consult') {
+    return `${topBar(UI.free ? 'Entraînement libre' : 'Texte du jour', back)}
+    <div class="row mt12" style="flex-wrap:wrap;gap:6px"><span class="tag amber">Consultation</span><span class="tag indigo">${esc(ROLE_LABEL[task.role])}</span>${task.dom ? `<span class="tag green">${esc(DOM_LABEL[task.dom])}</span>` : ''}</div>
+    <div class="card mt12 row" style="gap:12px">${marmot(64)}<span style="flex:1;font-weight:700;line-height:1.45">Un client t'a écrit. Tu es son avocate en droit allemand : réponds-lui en français, comme dans un vrai courriel de cabinet.</span></div>
+    <div class="card mt12 col" style="gap:4px"><span class="small">De : <b style="color:var(--ink)">${esc(task.expediteur)}</b></span><span class="small">Objet : <b style="color:var(--ink)">${esc(task.objet)}</b></span></div>
+    <p class="small mt12" style="line-height:1.45">Objectif : 200 à 300 mots, environ 45 minutes, sans dictionnaire.${UI.free ? '' : UI.dayB ? " Ce message était prévu hier : réponds-y aujourd'hui." : ' Demain, tu réécriras ta réponse après la correction de Claude.'}</p>
+    <div class="mt16"><button class="btn" data-act="beginText">Lire le message et répondre</button></div>`;
+  }
   return `${topBar(UI.mock ? 'Épreuve blanche' : UI.free ? 'Entraînement libre' : 'Texte du jour', back)}${tags}
   <div class="card mt12 col"><span class="label">${esc(task.titre)}${task.dom ? ' · ' + esc(DOM_LABEL[task.dom]) : ''}</span><span class="muted small" style="line-height:1.45">Traduction du ${info.from === 'de' ? 'allemand vers le français' : 'français vers l’allemand'}. Le texte s'affiche quand tu commences et le chrono démarre.</span></div>
   <div class="card mt12 row" style="gap:12px">${marmot(56)}<span class="small" style="flex:1;line-height:1.45">${exam} ${UI.mock ? 'Chrono : ' + info.mins + ' minutes.' : 'Ici : environ ' + lineCount(task.source) + ' lignes, objectif ' + targetMinutes(kind, task) + ' minutes.'}${UI.mock || UI.free ? '' : UI.dayB ? " Ce texte était prévu hier : fais-le aujourd'hui, demain un nouveau texte arrive." : " Demain, tu le réécriras après la correction de Claude."}</span></div>
@@ -617,14 +633,16 @@ VIEWS.write = () => {
   const e = entryById(UI.id); const t = taskOf(e); const info = KIND_INFO[e.kind] || {}; const trad = isTradKind(e.kind);
   const wc = wordCount(e.draft); const target = targetMinutes(e.kind, t, e.mock);
   const timerTxt = e.mock ? fmtTime(Math.max(0, target * 60 - (e.seconds || 0))) : fmtTime(e.seconds || 0);
-  const goal = e.kind === 'essai' ? (e.mock ? ' · environ 600 mots' : ' · objectif 300 à 400') : e.kind === 'redaction' ? ' · objectif 150 à 200' : '';
-  return `${topBar(trad ? 'Traduction' : 'Essai', e.mock || e.free ? 'train' : 'home', `<span class="timer">${ICON.clock()}<span id="timer">${timerTxt}</span></span>`)}
+  const goal = e.kind === 'essai' ? (e.mock ? ' · environ 600 mots' : ' · objectif 300 à 400') : e.kind === 'redaction' ? ' · objectif 150 à 200' : e.kind === 'consult' ? ' · objectif 200 à 300' : '';
+  return `${topBar(trad ? 'Traduction' : e.kind === 'consult' ? 'Consultation' : 'Essai', e.mock || e.free ? 'train' : 'home', `<span class="timer">${ICON.clock()}<span id="timer">${timerTxt}</span></span>`)}
   <div class="row mt8" style="flex-wrap:wrap;gap:6px"><span class="tag ${trad ? 'plum' : 'amber'}">${esc(KIND_LABEL[e.kind])}</span><span class="tag indigo">Sans dictionnaire</span>${t.dom ? `<span class="tag green">${esc(DOM_LABEL[t.dom])}</span>` : ''}</div>
   <p class="small mt8">${e.mock ? 'Épreuve blanche : ' + target + ' minutes, temps restant affiché.' : 'Objectif : environ ' + target + ' minutes.'}</p>
-  <div class="card mt8 col"><span class="label">${t.source ? 'Texte source · ' + (info.from === 'de' ? 'allemand' : 'français') : 'Sujet · ' + esc(t.titre)}</span><span class="source" style="white-space:pre-wrap">${esc(t.source || t.consigne)}</span></div>
+  ${e.kind === 'consult' ? `<div class="card mt8 col" style="gap:8px"><div class="col" style="gap:2px;border-bottom:1px solid var(--line);padding-bottom:8px"><span class="small">De : <b style="color:var(--ink)">${esc(t.expediteur)}</b></span><span class="small">Objet : <b style="color:var(--ink)">${esc(t.objet)}</b></span></div><span style="white-space:pre-wrap;font-size:15px;line-height:1.55;font-weight:600">${esc(t.message)}</span></div>
+  <p class="small mt8" style="line-height:1.45">Réponds en français : formule d'appel adaptée, réponse claire sur le droit allemand, prochaines étapes, formule de politesse.</p>`
+  : `<div class="card mt8 col"><span class="label">${t.source ? 'Texte source · ' + (info.from === 'de' ? 'allemand' : 'français') : 'Sujet · ' + esc(t.titre)}</span><span class="source" style="white-space:pre-wrap">${esc(t.source || t.consigne)}</span></div>`}
   ${e.handwritten ? `<div class="card mt16 col" style="border:2px dashed var(--indigo);box-shadow:none"><span class="h3">Écrit à la main</span><span class="small" style="line-height:1.45">Écris sur papier, puis appuie sur « J'ai fini ». Tu enverras une photo de ta copie à Claude, qui la transcrira et la corrigera.</span><button class="btn ghost sm" data-act="toggleHand">Revenir au clavier</button></div>
   <div class="mt16"><button class="btn" data-act="finishText">J'ai fini, envoyer ma photo à Claude</button></div>` : `
-  <label for="draft" class="small mt16" style="display:block;font-weight:800;margin-bottom:8px">${info.into === 'de' && trad ? 'Deine Übersetzung ins Deutsche' : trad ? 'Ta traduction en français' : 'Ton texte'}</label>
+  <label for="draft" class="small mt16" style="display:block;font-weight:800;margin-bottom:8px">${info.into === 'de' && trad ? 'Deine Übersetzung ins Deutsche' : trad ? 'Ta traduction en français' : e.kind === 'consult' ? 'Ta réponse au client' : 'Ton texte'}</label>
   <textarea id="draft" class="write" data-input="draft" placeholder="${trad ? 'Traduis ici…' : 'Écris ici…'}">${esc(e.draft)}</textarea>
   <div class="between small mt8"><span id="wc">${wc} mot${wc > 1 ? 's' : ''}${goal}</span><span>Brouillon enregistré</span></div>
   <div class="mt16"><button class="btn" data-act="finishText">Terminer mon texte</button></div>
@@ -682,7 +700,7 @@ VIEWS.rewrite = () => {
   const rw = e.rewrite || { draft: '' };
   return `${topBar('Réécriture', 'home')}
   <div class="row mt8" style="flex-wrap:wrap;gap:6px"><span class="tag amber">Jour B · réécriture</span><span class="tag indigo">${esc(t.titre)}</span></div>
-  <div class="card mt12 col"><span class="label">${t.source ? 'Texte source' : 'Consigne'}</span><span class="source">${esc(t.source || t.consigne)}</span></div>
+  <div class="card mt12 col"><span class="label">${t.source ? 'Texte source' : t.message ? 'Message de ' + esc(t.expediteur) : 'Consigne'}</span><span class="source" style="white-space:pre-wrap">${esc(t.source || t.message || t.consigne)}</span></div>
   ${e.correction ? `<details class="mt8"><summary>Jeter un œil à ma correction</summary><div class="card prewrap">${esc(e.correction)}</div></details>` : `<details class="mt8"><summary>Revoir mon premier texte</summary><div class="card prewrap">${esc(e.draft)}</div></details>`}
   <label for="rwdraft" class="small mt12" style="display:block;font-weight:800;margin-bottom:8px">Ta nouvelle version</label>
   <textarea id="rwdraft" class="write" data-input="rwdraft" placeholder="Réécris ton texte sans copier la correction…">${esc(rw.draft)}</textarea>
@@ -694,9 +712,9 @@ VIEWS.rewrite = () => {
 /* --- Entraînement libre et épreuve blanche --- */
 VIEWS.train = () => {
   const tf = UI.tf || 'jur_fr_de';
-  const kinds = [['jur_fr_de', 'FR → DE juridique'], ['gen_fr_de', 'FR → DE général'], ['jur_de_fr', 'DE → FR juridique'], ['gen_de_fr', 'DE → FR général'], ['essai', 'Essais']];
+  const kinds = [['consult', 'Consultations'], ['jur_fr_de', 'FR → DE juridique'], ['gen_fr_de', 'FR → DE général'], ['jur_de_fr', 'DE → FR juridique'], ['gen_de_fr', 'DE → FR général'], ['essai', 'Essais']];
   const doneIds = new Set(S.texts.filter((e) => e.status !== 'draft').map((e) => e.kind + ':' + e.taskId));
-  const list = (TEXTS[tf] || []).filter((t) => !t.mock).map((t) => `<button class="option" data-act="startFree" data-arg="${tf}:${t.id}"><span style="flex:1;min-width:0"><span style="display:block;font-weight:800">${esc(t.titre)}</span>${t.dom ? `<span class="small">${esc(DOM_LABEL[t.dom])}</span>` : t.consigne ? `<span class="small" style="display:block;line-height:1.35">${esc(t.consigne)}</span>` : ''}</span>${doneIds.has(tf + ':' + t.id) ? `<span class="check">${ICON.check()}</span>` : ICON.chev()}</button>`).join('');
+  const list = (TEXTS[tf] || []).filter((t) => !t.mock).map((t) => `<button class="option" data-act="startFree" data-arg="${tf}:${t.id}"><span style="flex:1;min-width:0"><span style="display:block;font-weight:800">${esc(t.titre)}</span>${t.expediteur ? `<span class="small">${esc(ROLE_LABEL[t.role])} · ${esc(t.expediteur)}</span>` : t.dom ? `<span class="small">${esc(DOM_LABEL[t.dom])}</span>` : t.consigne ? `<span class="small" style="display:block;line-height:1.35">${esc(t.consigne)}</span>` : ''}</span>${doneIds.has(tf + ':' + t.id) ? `<span class="check">${ICON.check()}</span>` : ICON.chev()}</button>`).join('');
   const mocks = S.texts.filter((e) => e.mock && e.status !== 'draft').slice(-5).reverse();
   return `${topBar('Entraînement', 'home')}
   <div class="card dark mt12 col" style="gap:10px">
@@ -846,7 +864,7 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">LexRhin · version 1.6</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.7</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
