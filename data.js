@@ -633,3 +633,65 @@ TEXTS.consult = [
   { id: 'c15', dom: 'penal', role: 'particulier', expediteur: 'Mme Julie Petit, Strasbourg', titre: 'Une amende allemande', objet: 'Bußgeldbescheid', message: "Maître,\n\nJ'ai reçu un « Bußgeldbescheid » pour un excès de vitesse sur une autoroute près de Karlsruhe. Je ne conduisais pas ce jour-là : c'était mon frère.\n\nQue dois-je faire ? Combien de temps ai-je pour contester ? Risque-t-on un retrait de points en France ?\n\nMerci beaucoup,\n\nJulie Petit" },
   { id: 'c16', dom: 'public', role: 'notaire', expediteur: 'Maître Laurent Weber, notaire à Saverne', titre: 'Vente d’un bien en Allemagne', objet: 'Vente immobilière à Rastatt', message: "Maître,\n\nUn client français souhaite vendre une maison située à Rastatt. Il me demande comment se déroule une vente immobilière en Allemagne.\n\nPourriez-vous m'indiquer brièvement les grandes étapes : rôle du notaire allemand, inscription au livre foncier, garanties pour l'acheteur et délais habituels ?\n\nJe vous remercie et vous prie d'agréer, Maître, mes salutations distinguées.\n\nLaurent Weber" }
 ];
+
+/* ===== Oral : entretien de civilisation (on répond dans la langue de la question) ===== */
+const ORAL_QUESTIONS = [
+  { id: 'o1', lang: 'fr', q: "Présentez le rôle du maire dans une commune française." },
+  { id: 'o2', lang: 'fr', q: "Quels sont, selon vous, les grands défis de la coopération transfrontalière dans le Rhin supérieur ?" },
+  { id: 'o3', lang: 'fr', q: "Expliquez en quelques phrases l'organisation de la justice française à un collègue allemand." },
+  { id: 'o4', lang: 'fr', q: "Quelle place l'allemand et le français devraient-ils avoir dans l'enseignement de notre région ?" },
+  { id: 'o5', lang: 'fr', q: "Comment la Constitution de 1958 organise-t-elle la séparation des pouvoirs ?" },
+  { id: 'o6', lang: 'fr', q: "Quelles différences voyez-vous entre le notariat français et le notariat allemand ?" },
+  { id: 'o7', lang: 'fr', q: "Comment présenteriez-vous le droit local d'Alsace-Moselle à un juriste allemand ?" },
+  { id: 'o8', lang: 'fr', q: "Vu de France, quels sont les avantages et les inconvénients du fédéralisme allemand ?" },
+  { id: 'o9', lang: 'de', q: "Erläutern Sie die Rolle des Bundesrats im Gesetzgebungsverfahren." },
+  { id: 'o10', lang: 'de', q: "Wie würden Sie einem französischen Mandanten das Erbscheinsverfahren erklären?" },
+  { id: 'o11', lang: 'de', q: "Welche Bedeutung hat der Élysée-Vertrag heute noch für die deutsch-französischen Beziehungen?" },
+  { id: 'o12', lang: 'de', q: "Worin unterscheiden sich das deutsche und das französische Justizsystem am deutlichsten?" },
+  { id: 'o13', lang: 'de', q: "Welche praktischen Probleme haben Grenzgänger am Oberrhein, und wie könnte man sie lösen?" },
+  { id: 'o14', lang: 'de', q: "Beschreiben Sie die Aufgaben einer Gemeinde in Baden-Württemberg." },
+  { id: 'o15', lang: 'de', q: "Welche Rolle spielt das Ehrenamt in der deutschen Gesellschaft?" },
+  { id: 'o16', lang: 'de', q: "Wie beurteilen Sie die Digitalisierung der Verwaltung in Deutschland und in Frankreich?" }
+];
+
+/* ===== Quiz de civilisation (France, Allemagne, franco-allemand) ===== */
+const CIVI = [
+  { p: 'FR', q: "En quelle année la Ve République a-t-elle été instituée ?", o: ['1946', '1958', '1962'], a: 1, e: "La Constitution du 4 octobre 1958 fonde la Ve République." },
+  { p: 'FR', q: "Quelle est la durée du mandat du président de la République ?", o: ['5 ans', '6 ans', '7 ans'], a: 0, e: "Le quinquennat a remplacé le septennat à partir de 2002." },
+  { p: 'FR', q: "Qui nomme le Premier ministre ?", o: ["Le président de la République", "L'Assemblée nationale", 'Le Sénat'], a: 0, e: "Article 8 de la Constitution." },
+  { p: 'FR', q: "Combien de régions compte la France métropolitaine depuis 2016 ?", o: ['13', '18', '22'], a: 0, e: "La réforme territoriale a réduit leur nombre de 22 à 13." },
+  { p: 'FR', q: "Que permet l'article 49, alinéa 3, de la Constitution ?", o: ["Faire adopter un texte sans vote, sauf motion de censure", 'Dissoudre le Sénat', 'Organiser un référendum'], a: 0, e: "Le gouvernement engage sa responsabilité sur un texte." },
+  { p: 'FR', q: "Quelle est la plus haute juridiction de l'ordre administratif ?", o: ["Le Conseil d'État", 'La Cour de cassation', 'Le Conseil constitutionnel'], a: 0, e: "La Cour de cassation est au sommet de l'ordre judiciaire." },
+  { p: 'FR', q: "Depuis quelle année un justiciable peut-il soulever une question prioritaire de constitutionnalité (QPC) ?", o: ['1974', '2010', '2017'], a: 1, e: "Créée par la révision de 2008, la QPC est entrée en vigueur le 1er mars 2010." },
+  { p: 'FR', q: "En quelle année a été votée la loi de séparation des Églises et de l'État ?", o: ['1789', '1905', '1958'], a: 1, e: "Elle ne s'applique pas en Alsace-Moselle, qui a conservé le régime concordataire." },
+  { p: 'FR', q: "Comment les sénateurs sont-ils élus ?", o: ['Au suffrage universel indirect', 'Au suffrage universel direct', 'Ils sont nommés par le président'], a: 0, e: "Ils sont élus par des grands électeurs, surtout des élus locaux." },
+  { p: 'FR', q: "Combien de députés siègent à l'Assemblée nationale ?", o: ['348', '577', '709'], a: 1, e: "Le Sénat compte 348 sénateurs." },
+  { p: 'FR', q: "Combien de membres nommés compte le Conseil constitutionnel ?", o: ['9', '12', '15'], a: 0, e: "Trois sont nommés par le président de la République, trois par le président de l'Assemblée et trois par celui du Sénat." },
+  { p: 'FR', q: "En quelle année a été promulgué le Code civil des Français ?", o: ['1789', '1804', '1870'], a: 1, e: "Le « Code Napoléon » date du 21 mars 1804." },
+  { p: 'FR', q: "Depuis 2020, le tribunal judiciaire regroupe :", o: ["l'ancien tribunal de grande instance et le tribunal d'instance", 'le tribunal administratif et la cour d’appel', 'le conseil de prud’hommes et le tribunal de commerce'], a: 0, e: "La réforme est entrée en vigueur le 1er janvier 2020." },
+  { p: 'FR', q: "Quelle collectivité a été créée le 1er janvier 2021 ?", o: ["La Collectivité européenne d'Alsace", 'La région Grand Est', "L'Eurométropole de Strasbourg"], a: 0, e: "Elle réunit les compétences des départements du Bas-Rhin et du Haut-Rhin." },
+  { p: 'FR', q: "Le préfet est :", o: ["le représentant de l'État dans le département", 'le président du conseil départemental', 'un magistrat du parquet'], a: 0, e: "Il est nommé par décret du président de la République." },
+  { p: 'FR', q: "Combien d'ordres de juridiction principaux existe-t-il en France ?", o: ['Un', 'Deux', 'Trois'], a: 1, e: "L'ordre judiciaire et l'ordre administratif." },
+  { p: 'DE', q: "En quelle année la Loi fondamentale (Grundgesetz) a-t-elle été adoptée ?", o: ['1945', '1949', '1990'], a: 1, e: "Elle a été promulguée le 23 mai 1949." },
+  { p: 'DE', q: "Par qui le chancelier fédéral est-il élu ?", o: ['Le peuple', 'Le Bundestag', 'Le Bundesrat'], a: 1, e: "Sur proposition du président fédéral." },
+  { p: 'DE', q: "Combien de Länder compte l'Allemagne ?", o: ['11', '16', '20'], a: 1, e: "Dont trois villes-États : Berlin, Hambourg et Brême." },
+  { p: 'DE', q: "Où siège la Cour constitutionnelle fédérale ?", o: ['Berlin', 'Karlsruhe', 'Leipzig'], a: 1, e: "La Cour fédérale de justice (BGH) siège aussi à Karlsruhe." },
+  { p: 'DE', q: "Quelle est la capitale du Bade-Wurtemberg ?", o: ['Karlsruhe', 'Fribourg-en-Brisgau', 'Stuttgart'], a: 2, e: "Le Land a été créé en 1952." },
+  { p: 'DE', q: "Quand le BGB (Code civil allemand) est-il entré en vigueur ?", o: ['1er janvier 1900', '1er janvier 1871', '1er janvier 1949'], a: 0, e: "Il avait été adopté en 1896." },
+  { p: 'DE', q: "Quelle est la date de la réunification allemande ?", o: ['9 novembre 1989', '3 octobre 1990', '1er janvier 1991'], a: 1, e: "Le 9 novembre 1989 est la date de la chute du Mur." },
+  { p: 'DE', q: "Quelle est la durée de la législature du Bundestag ?", o: ['4 ans', '5 ans', '6 ans'], a: 0, e: "Article 39 de la Loi fondamentale." },
+  { p: 'DE', q: "De qui se compose le Bundesrat ?", o: ['De membres des gouvernements des Länder', 'De sénateurs élus au suffrage direct', 'Des maires des grandes villes'], a: 0, e: "Les Länder y disposent de 3 à 6 voix selon leur population." },
+  { p: 'DE', q: "Par qui le président fédéral est-il élu ?", o: ["Par l'Assemblée fédérale (Bundesversammlung)", 'Au suffrage universel direct', 'Par le Bundesrat seul'], a: 0, e: "Pour un mandat de cinq ans." },
+  { p: 'DE', q: "Que signifie le « konstruktives Misstrauensvotum » ?", o: ["Le Bundestag ne peut renverser le chancelier qu'en élisant un successeur", 'Le président peut dissoudre le Bundestag à tout moment', 'Les Länder peuvent censurer le gouvernement'], a: 0, e: "Article 67 de la Loi fondamentale." },
+  { p: 'DE', q: "Qu'a changé la réforme du notariat de 2018 en Bade-Wurtemberg ?", o: ["Les notaires fonctionnaires ont été remplacés par des notaires indépendants", 'Les notaires ont été supprimés', 'Les avocats peuvent faire des actes authentiques'], a: 0, e: "Depuis le 1er janvier 2018, les compétences successorales sont aussi revenues aux Amtsgerichte." },
+  { p: 'DE', q: "Quelle autorité délivre l'Erbschein ?", o: ["Le tribunal des successions (Amtsgericht)", 'Le notaire', "L'administration fiscale"], a: 0, e: "Sur demande, souvent préparée par un notaire." },
+  { p: 'DE', q: "À quelles élections s'applique la clause des 5 % (Fünf-Prozent-Hürde) ?", o: ['Aux élections du Bundestag', 'Aux élections municipales françaises', 'Aux élections présidentielles'], a: 0, e: "Un parti doit obtenir au moins 5 % des secondes voix, sauf exceptions." },
+  { p: 'FR-DE', q: "En quelle année a été signé le traité de l'Élysée ?", o: ['1950', '1963', '1990'], a: 1, e: "Signé le 22 janvier 1963 par Charles de Gaulle et Konrad Adenauer." },
+  { p: 'FR-DE', q: "Quel traité franco-allemand a été signé en 2019 ?", o: ["Le traité d'Aix-la-Chapelle", 'Le traité de Maastricht', 'Le traité de Lisbonne'], a: 0, e: "Il renforce notamment la coopération transfrontalière." },
+  { p: 'FR-DE', q: "Quand l'Office franco-allemand pour la Jeunesse (OFAJ) a-t-il été créé ?", o: ['1963', '1979', '2003'], a: 0, e: "Dans la foulée du traité de l'Élysée." },
+  { p: 'FR-DE', q: "Quelle institution européenne tient ses sessions plénières à Strasbourg ?", o: ['Le Parlement européen', 'La Commission européenne', 'La Banque centrale européenne'], a: 0, e: "Strasbourg accueille aussi le Conseil de l'Europe et la Cour européenne des droits de l'homme." },
+  { p: 'FR-DE', q: "Avec quel territoire allemand l'Eurométropole de Strasbourg forme-t-elle un Eurodistrict ?", o: ["L'Ortenau", 'La Forêt-Noire', 'Le Palatinat'], a: 0, e: "L'Eurodistrict Strasbourg-Ortenau." },
+  { p: 'FR-DE', q: "Depuis quand le règlement européen sur les successions (n° 650/2012) s'applique-t-il ?", o: ['Aux décès survenus depuis le 17 août 2015', 'Aux décès survenus depuis 2012', 'Aux décès survenus depuis 2020'], a: 0, e: "Il a créé le certificat successoral européen." },
+  { p: 'FR-DE', q: "Selon ce règlement, quelle loi s'applique en principe à la succession ?", o: ['La loi de la dernière résidence habituelle du défunt', 'La loi de la nationalité du défunt', 'La loi du lieu des biens'], a: 0, e: "Le défunt peut toutefois choisir la loi de sa nationalité (professio juris)." },
+  { p: 'FR-DE', q: "Depuis quand un tramway relie-t-il Strasbourg à Kehl ?", o: ['2007', '2017', '2022'], a: 1, e: "La ligne D franchit le Rhin depuis avril 2017." }
+];

@@ -31,11 +31,11 @@ const LEVELS = [
 const KIND_ORDER = ['essai', 'gen_fr_de', 'jur_fr_de', 'gen_de_fr', 'jur_de_fr'];
 const KIND_LABEL = {
   essai: 'Épreuve 1 · Essai en français', gen_fr_de: 'Épreuve 2 · Texte général FR → DE', jur_fr_de: 'Épreuve 3 · Texte juridique FR → DE',
-  gen_de_fr: 'Épreuve 4 · Texte général DE → FR', jur_de_fr: 'Épreuve 5 · Texte juridique DE → FR', consult: 'Consultation · réponse à un client',
+  gen_de_fr: 'Épreuve 4 · Texte général DE → FR', jur_de_fr: 'Épreuve 5 · Texte juridique DE → FR', consult: 'Consultation · réponse à un client', oral_fr_de: 'Oral · traduction à vue FR → DE', oral_de_fr: 'Oral · traduction à vue DE → FR', oral_conv: 'Oral · entretien de civilisation', perso_fr_de: 'Mon texte · FR → DE', perso_de_fr: 'Mon texte · DE → FR',
   redaction: 'Rédaction en français', trad_de_fr: 'Traduction allemand → français', trad_fr_de: 'Traduction français → allemand'
 };
-const KIND_SHORT = { consult: 'Consultation', essai: 'Essai en français', gen_fr_de: 'Traduction FR → DE (général)', jur_fr_de: 'Traduction FR → DE (juridique)', gen_de_fr: 'Traduction DE → FR (général)', jur_de_fr: 'Traduction DE → FR (juridique)', redaction: 'Rédaction', trad_de_fr: 'Traduction DE → FR', trad_fr_de: 'Traduction FR → DE' };
-const KIND_INFO = { consult: { mins: 45, into: 'fr' }, essai: { mins: 180, into: 'fr' }, gen_fr_de: { mins: 90, from: 'fr', into: 'de' }, jur_fr_de: { mins: 90, from: 'fr', into: 'de' }, gen_de_fr: { mins: 90, from: 'de', into: 'fr' }, jur_de_fr: { mins: 90, from: 'de', into: 'fr' }, redaction: { into: 'fr' }, trad_de_fr: { from: 'de', into: 'fr' }, trad_fr_de: { from: 'fr', into: 'de' } };
+const KIND_SHORT = { oral_fr_de: 'Oral · traduction à vue FR → DE', oral_de_fr: 'Oral · traduction à vue DE → FR', oral_conv: 'Oral · entretien', perso_fr_de: 'Mon texte FR → DE', perso_de_fr: 'Mon texte DE → FR', consult: 'Consultation', essai: 'Essai en français', gen_fr_de: 'Traduction FR → DE (général)', jur_fr_de: 'Traduction FR → DE (juridique)', gen_de_fr: 'Traduction DE → FR (général)', jur_de_fr: 'Traduction DE → FR (juridique)', redaction: 'Rédaction', trad_de_fr: 'Traduction DE → FR', trad_fr_de: 'Traduction FR → DE' };
+const KIND_INFO = { oral_fr_de: { mins: 20, from: 'fr', into: 'de', oral: true }, oral_de_fr: { mins: 20, from: 'de', into: 'fr', oral: true }, oral_conv: { mins: 5, oral: true }, perso_fr_de: { from: 'fr', into: 'de' }, perso_de_fr: { from: 'de', into: 'fr' }, consult: { mins: 45, into: 'fr' }, essai: { mins: 180, into: 'fr' }, gen_fr_de: { mins: 90, from: 'fr', into: 'de' }, jur_fr_de: { mins: 90, from: 'fr', into: 'de' }, gen_de_fr: { mins: 90, from: 'de', into: 'fr' }, jur_de_fr: { mins: 90, from: 'de', into: 'fr' }, redaction: { into: 'fr' }, trad_de_fr: { from: 'de', into: 'fr' }, trad_fr_de: { from: 'fr', into: 'de' } };
 const DOM_LABEL = { prive: 'Droit privé', penal: 'Droit pénal', public: 'Droit public' };
 const isTradKind = (k) => !!(KIND_INFO[k] || {}).from;
 // Rotation du texte du jour : une consultation client un texte sur deux, les épreuves d'examen entre les deux
@@ -48,7 +48,7 @@ function defaults() {
   return {
     v: 1, name: 'Selina', vocabSize: 10, xp: 0,
     vocab: {}, custom: [], grammar: {}, days: {}, texts: [], kindNext: { redaction: 0, trad_de_fr: 0, trad_fr_de: 0 }, kindTurn: 0,
-    tests: [], created: today(), domains: DOMAINS.map((d) => d.id), focusSucc: true
+    tests: [], created: today(), domains: DOMAINS.map((d) => d.id), focusSucc: true, myTexts: [], weak: {}, civi: {}, remind: '19:00'
   };
 }
 let S = load();
@@ -56,7 +56,7 @@ function load() {
   try { const raw = localStorage.getItem(KEY); if (raw) return Object.assign(defaults(), JSON.parse(raw)); } catch (e) { /* stockage indisponible */ }
   return defaults();
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Sauvegarde impossible sur cet appareil'); } }
+function save() { S.updated = Date.now(); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Sauvegarde impossible sur cet appareil'); } if (typeof schedulePush === 'function') schedulePush(); }
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { }
 
 function day(k) { k = k || today(); if (!S.days[k]) S.days[k] = { v: false, g: false, t: false, test: false, xp: 0 }; return S.days[k]; }
@@ -183,15 +183,20 @@ function addCustomWord(de, fr, note, theme) {
 }
 
 /* ---------- Grammaire ---------- */
-function buildGrammarSession(n) {
+const WEAK_CATS = () => Object.keys(RULES).concat(['Orthographe', 'Vocabulaire juridique', 'Style']);
+function topWeak(k) { return Object.entries(S.weak || {}).sort((a, b) => b[1] - a[1]).slice(0, k).map((x) => x[0]); }
+function buildGrammarSession(n, topic) {
   const idx = GRAMMAR.map((g, i) => i);
+  if (topic) { const own = shuffle(idx.filter((i) => GRAMMAR[i].t === topic)); return own.concat(shuffle(idx.filter((i) => GRAMMAR[i].t !== topic))).slice(0, n); }
+  const weakTopics = topWeak(3).filter((t) => RULES[t]);
+  const fromWeak = shuffle(idx.filter((i) => weakTopics.includes(GRAMMAR[i].t))).slice(0, 2);
   const unseen = shuffle(idx.filter((i) => !S.grammar['g' + i]));
   const seen = idx.filter((i) => S.grammar['g' + i]).sort((a, b) => {
     const A = S.grammar['g' + a], B = S.grammar['g' + b];
     return (A.ok - A.ko) - (B.ok - B.ko) || A.last.localeCompare(B.last);
   });
   const weak = seen.filter((i) => S.grammar['g' + i].ko > 0);
-  const order = weak.slice(0, 2).concat(unseen, seen.filter((i) => !weak.slice(0, 2).includes(i)));
+  const order = fromWeak.concat(weak.slice(0, 2), unseen, seen).filter((v, i, a) => a.indexOf(v) === i);
   return shuffle(order.slice(0, n));
 }
 function gradeGrammar(i, ok) {
@@ -202,7 +207,13 @@ function gradeGrammar(i, ok) {
 /* ---------- Textes ---------- */
 function lastEntry() { return S.texts.length ? S.texts[S.texts.length - 1] : null; }
 function entryById(id) { return S.texts.find((e) => e.id === id); }
-function taskOf(e) { return TEXTS[e.kind].find((t) => t.id === e.taskId); }
+function findTask(kind, id, srcKind) {
+  if (kind === 'oral_conv') { const q = ORAL_QUESTIONS.find((x) => x.id === id); return q ? { id: q.id, titre: 'Entretien de civilisation', consigne: q.q, lang: q.lang } : null; }
+  if (kind.startsWith('oral_')) return (TEXTS[srcKind] || []).find((t) => t.id === id);
+  if (kind.startsWith('perso_')) return (S.myTexts || []).find((t) => t.id === id) || { id, titre: 'Texte supprimé', source: '' };
+  return (TEXTS[kind] || []).find((t) => t.id === id);
+}
+function taskOf(e) { return findTask(e.kind, e.taskId, e.srcKind); }
 function tasksFor(kind) {
   const all = (TEXTS[kind] || []).filter((t) => !t.mock);
   const list = all.filter((t) => !t.dom || (S.domains || []).includes(t.dom));
@@ -237,6 +248,9 @@ function claudePrompt(e, isRewrite) {
   const lines = ["Bonjour Claude ! Je prépare la Staatliche Prüfung für Übersetzer (Bade-Wurtemberg), langue française, spécialité droit. Ma langue maternelle est l'allemand.", ''];
   if (isRewrite) lines.push("Voici la réécriture de mon texte, après ta première correction. Dis-moi les erreurs qui restent.", '');
   lines.push('Exercice : ' + (KIND_LABEL[e.kind] || '') + ' — ' + t.titre + (e.mock ? ' (épreuve blanche, conditions d’examen)' : ''));
+  if (info.oral && e.kind !== 'oral_conv') lines.push("Exercice d'oral : traduction à vue (Stegreifübersetzung) du " + (info.from === 'de' ? "l'allemand vers le français" : "français vers l'allemand") + '. Voici le texte :', '"""', t.source, '"""', '', 'Voici ma traduction orale, dictée au téléphone (la ponctuation et certaines fautes peuvent venir de la dictée) :', '"""', e.draft, '"""', '', "Évalue comme à l'oral de l'examen : fidélité, fluidité, terminologie et registre. Ensuite, comme un examinateur, pose-moi trois questions de spécialité (Fachgespräch) sur la terminologie et le contexte de ce texte, en français et en allemand.");
+  if (e.kind === 'oral_conv') lines.push("Exercice d'oral : entretien de civilisation. Question de l'examinateur :", t.consigne, '', 'Ma réponse orale, dictée au téléphone :', '"""', e.draft, '"""', '', "Évalue le contenu, la langue et l'aisance, puis pose-moi deux questions de relance comme un examinateur.");
+  if (info.oral) { lines.push('', 'Merci de répondre en respectant ce format :', '1. Ta correction et tes remarques.', '2. Une note indicative sur 20, écrite « Note : X/20 ».', '3. Tes questions d’examinateur.', "4. Le bloc POINTS FAIBLES, suivi d'une seule ligne qui liste 1 à 3 catégories (séparées par des points-virgules) parmi : " + WEAK_CATS().join(', ') + '.', '5. Pour finir, exactement ce bloc (5 mots maximum, un par ligne, sans tableau) :', 'NOUVEAUX MOTS', 'mot allemand ; équivalent français ; remarque courte'); return lines.join('\n'); }
   if (e.kind === 'consult') lines.push("Jeu de rôle : je suis avocate allemande (Rechtsanwältin). Un client français m'a écrit ; je lui réponds en français.", 'Message reçu de ' + t.expediteur + ' (objet : ' + t.objet + ') :', '"""', t.message, '"""');
   if (t.consigne) lines.push((e.kind === 'essai' ? 'Sujet : ' : 'Consigne : ') + t.consigne);
   if (t.source) lines.push('Texte source (' + (info.from === 'de' ? 'allemand' : 'français') + ') :', '"""', t.source, '"""');
@@ -250,7 +264,8 @@ function claudePrompt(e, isRewrite) {
     '1. Ma version corrigée complète.',
     '2. Les erreurs, classées (grammaire, registre, lexique, sens), avec une explication courte pour chacune.',
     '3. Une note indicative sur 20, écrite « Note : X/20 ».',
-    '4. Pour finir, exactement ce bloc (5 mots maximum, un par ligne, sans tableau) :',
+    "4. Le bloc POINTS FAIBLES, suivi d'une seule ligne qui liste 1 à 3 catégories (séparées par des points-virgules) parmi : " + WEAK_CATS().join(', ') + '.',
+    '5. Pour finir, exactement ce bloc (5 mots maximum, un par ligne, sans tableau) :',
     'NOUVEAUX MOTS',
     'mot allemand ; équivalent français ; remarque courte');
   return lines.join('\n');
@@ -273,10 +288,19 @@ function parseCorrection(txt) {
       } else if (words.length) break;
     }
   }
+  const weak = [];
+  const wi = lines.findIndex((l) => /points\s+faibles/i.test(l));
+  if (wi >= 0) {
+    const cats = WEAK_CATS(); const norm = (x) => stripAcc(String(x).toLowerCase()).replace(/[^a-z ]/g, '').trim();
+    for (let j = wi + 1; j < Math.min(lines.length, wi + 4); j++) {
+      const l = lines[j].trim(); if (!l) { if (weak.length) break; else continue; } if (/nouveaux\s+mots/i.test(l)) break;
+      l.replace(/^[-*•\s]+/, '').split(/[;,]/).forEach((p) => { const n = norm(p); if (!n) return; const c = cats.find((x) => norm(x) === n || norm(x).startsWith(n) || n.startsWith(norm(x))); if (c && !weak.includes(c)) weak.push(c); });
+    }
+  }
   let score = null;
   const m = String(txt || '').match(/note\s*:?\s*\**\s*(\d{1,2}(?:[.,]\d+)?)\s*\/\s*20/i) || String(txt || '').match(/(\d{1,2}(?:[.,]\d+)?)\s*\/\s*20/);
   if (m) { const v = parseFloat(m[1].replace(',', '.')); if (v >= 0 && v <= 20) score = v; }
-  return { words, score };
+  return { words, score, weak };
 }
 
 /* ---------- Interface ---------- */
@@ -395,7 +419,8 @@ VIEWS.home = () => {
   ${pendingCard}
   <div class="between mt16" style="margin-bottom:8px"><span class="h2">Mission du jour</span><span class="small">${doneCount} / 3 faite${doneCount > 1 ? 's' : ''}</span></div>
   <div class="col">${missions}</div>
-  <button class="mission mt8" data-act="nav" data-arg="train"><div class="mico" style="background:var(--plum-soft)">${ICON.trophy('#7A3E9D')}</div><div style="flex:1"><div class="mtitle">Entraînement libre</div><div class="msub">Textes au choix · épreuve blanche chronométrée</div></div>${ICON.chev()}</button>
+  <button class="mission mt8" data-act="startCivi"><div class="mico" style="background:var(--green-soft)">${ICON.flag()}</div><div style="flex:1"><div class="mtitle">Civilisation · bonus</div><div class="msub">5 questions France, Allemagne, franco-allemand</div></div>${d.c ? `<div class="check">${ICON.check()}</div>` : ICON.chev()}</button>
+  <button class="mission mt8" data-act="nav" data-arg="train"><div class="mico" style="background:var(--plum-soft)">${ICON.trophy('#7A3E9D')}</div><div style="flex:1"><div class="mtitle">Entraînement</div><div class="msub">Oral · mes textes · textes au choix · épreuve blanche</div></div>${ICON.chev()}</button>
   <div class="row small mt12" style="gap:8px">${ICON.flag()}<span>Objectif : examen d'État de traductrice (Bade-Wurtemberg) · français · droit</span></div>`;
 };
 
@@ -615,7 +640,7 @@ VIEWS.textIntro = () => {
     <div class="col mt12">${topics.map((t) => `<button class="option" data-act="beginEssay" data-arg="${t.id}"><span style="flex:1;line-height:1.4">${esc(t.consigne)}</span>${ICON.chev()}</button>`).join('')}</div>
     <p class="small mt12" style="line-height:1.45">${exam} ${UI.mock ? 'Chrono : 180 minutes.' : 'Objectif ici : environ 60 minutes.'}</p>`;
   }
-  const task = TEXTS[kind].find((t) => t.id === UI.taskId);
+  const task = findTask(kind, UI.taskId);
   if (kind === 'consult') {
     return `${topBar(UI.free ? 'Entraînement libre' : 'Texte du jour', back)}
     <div class="row mt12" style="flex-wrap:wrap;gap:6px"><span class="tag amber">Consultation</span><span class="tag indigo">${esc(ROLE_LABEL[task.role])}</span>${task.dom ? `<span class="tag green">${esc(DOM_LABEL[task.dom])}</span>` : ''}</div>
@@ -686,7 +711,7 @@ VIEWS.correction = () => {
   </div>
   ${words.length ? `<div class="card dark mt12 col"><span class="h3" style="color:#fff">${isRw ? 'Ajoutés à ton lexique' : 'À apprendre avant la réécriture'}</span>${words.map((w) => `<div class="between" style="font-size:14px;font-weight:700;gap:12px"><span>${esc(w.fr)}</span><span style="color:#D4D6F0;text-align:right">${esc(w.de)}</span></div>`).join('')}</div>` : (UI.parsedNone ? `<div class="card mt12 small" style="line-height:1.45">Je n'ai pas trouvé de bloc « NOUVEAUX MOTS ». Tu peux ajouter des mots à la main dans le Lexique.</div>` : '')}
   <details class="mt12" ${words.length ? '' : 'open'}><summary>Voir la correction complète</summary><div class="card prewrap">${esc(corr)}</div></details>
-  <div class="mt16">${isRw ? '' : `<div class="card row" style="gap:10px;border:2px dashed #C9CBDD;box-shadow:none"><span class="small" style="flex:1;line-height:1.45">Réécriture prévue demain : tu repartiras de ce texte corrigé.</span></div><div class="mt12"></div>`}<button class="btn" data-act="nav" data-arg="home">Retour à l'accueil</button></div>`;
+  <div class="mt16">${isRw || e.pair == null ? '' : `<div class="card row" style="gap:10px;border:2px dashed #C9CBDD;box-shadow:none"><span class="small" style="flex:1;line-height:1.45">Réécriture prévue demain : tu repartiras de ce texte corrigé.</span></div><div class="mt12"></div>`}<button class="btn" data-act="nav" data-arg="home">Retour à l'accueil</button></div>`;
 };
 VIEWS.rewrite = () => {
   const e = entryById(UI.id); const t = taskOf(e);
@@ -709,14 +734,83 @@ VIEWS.rewrite = () => {
   <div class="mt8"><button class="btn ghost sm" data-act="toggleRwHand">${rw.handwritten ? 'Revenir au clavier' : "J'écris à la main (photo pour Claude)"}</button></div>`;
 };
 
+/* --- Oral : traduction à vue et entretien --- */
+function startSight(dir) {
+  const kinds = dir === 'fr_de' ? ['gen_fr_de', 'jur_fr_de'] : ['gen_de_fr', 'jur_de_fr'];
+  const pool = []; kinds.forEach((k) => (TEXTS[k] || []).filter((t) => !t.mock).forEach((t) => pool.push([k, t])));
+  const [srcKind, task] = pool[Math.floor(Math.random() * pool.length)];
+  const e = startNewEntry('oral_' + dir, task, null, { free: true, srcKind });
+  go('sight', { id: e.id, phase: 'read', left: 120 });
+}
+function startConv() {
+  const done = new Set(S.texts.filter((e) => e.kind === 'oral_conv').map((e) => e.taskId));
+  const pool = ORAL_QUESTIONS.filter((q) => !done.has(q.id)); const list = pool.length ? pool : ORAL_QUESTIONS;
+  const q = list[Math.floor(Math.random() * list.length)];
+  const e = startNewEntry('oral_conv', { id: q.id }, null, { free: true });
+  go('sight', { id: e.id, phase: 'speak' });
+}
+VIEWS.oral = () => `${topBar('Oral', 'train')}
+  <div class="card mt12 row" style="gap:12px">${marmot(60)}<span class="small" style="flex:1;line-height:1.45">À l'oral de l'examen : un entretien de civilisation d'environ 30 minutes, une traduction à vue dans les deux sens (environ 20 minutes chacune) et un échange de spécialité sur les textes.</span></div>
+  <div class="card mt12 col"><span class="h3">Traduction à vue</span><span class="small" style="line-height:1.45">2 minutes pour lire le texte, puis tu le traduis à voix haute en dictant sur le clavier (touche micro). Claude corrige puis te pose des questions d'examinateur.</span>
+    <div class="grid2"><button class="btn sm" data-act="startSight" data-arg="fr_de">FR → DE</button><button class="btn sm" data-act="startSight" data-arg="de_fr">DE → FR</button></div></div>
+  <div class="card mt12 col"><span class="h3">Entretien de civilisation</span><span class="small" style="line-height:1.45">Une question en français ou en allemand : réponds-y à l'oral pendant 3 à 5 minutes, en dictant ta réponse.</span>
+    <button class="btn sm soft" data-act="startConv">Tirer une question</button></div>
+  <p class="small mt12" style="line-height:1.45">Astuce : pour dicter en allemand, passe sur le clavier allemand avant de toucher le micro. La dictée doit être activée dans Réglages, puis Général, puis Clavier.</p>`;
+VIEWS.sight = () => {
+  const e = entryById(UI.id); const t = taskOf(e); const conv = e.kind === 'oral_conv'; const info = KIND_INFO[e.kind];
+  const head = topBar(conv ? 'Entretien' : 'Traduction à vue', 'oral', `<span class="timer">${ICON.clock()}<span id="timer">${UI.phase === 'read' ? fmtTime(UI.left) : fmtTime(e.seconds || 0)}</span></span>`);
+  const card = conv ? `<div class="card mt12 col"><span class="label">Question · ${t.lang === 'de' ? 'réponds en allemand' : 'réponds en français'}</span><span class="source">${esc(t.consigne)}</span></div>`
+    : `<div class="card mt12 col"><span class="label">Texte ${info.from === 'de' ? 'allemand' : 'français'} · à traduire ${info.into === 'de' ? 'en allemand' : 'en français'}</span><span class="source" style="white-space:pre-wrap">${esc(t.source)}</span></div>`;
+  if (UI.phase === 'read') return `${head}<div class="row mt8"><span class="tag plum">${esc(KIND_LABEL[e.kind])}</span></div>${card}
+    <p class="small mt12">Lecture : 2 minutes. Repère les termes difficiles, puis lance-toi.</p>
+    <div class="mt12"><button class="btn" data-act="sightSpeak">Je commence à traduire</button></div>`;
+  return `${head}<div class="row mt8"><span class="tag plum">${esc(KIND_LABEL[e.kind])}</span></div>${card}
+    <label for="draft" class="small mt16" style="display:block;font-weight:800;margin-bottom:8px">${conv ? 'Ta réponse' : 'Ta traduction'} : touche la zone, puis le micro du clavier, et parle</label>
+    <textarea id="draft" class="write" data-input="draft" style="min-height:200px" placeholder="Dicte ici…">${esc(e.draft)}</textarea>
+    <div class="between small mt8"><span id="wc">${wordCount(e.draft)} mots</span><span>${conv ? 'Objectif : 3 à 5 minutes' : 'Parle sans t’arrêter, comme à l’examen'}</span></div>
+    <div class="mt16"><button class="btn" data-act="finishText">Terminer et faire corriger</button></div>`;
+};
+
+/* --- Quiz de civilisation --- */
+function startCivi() {
+  const idx = CIVI.map((c, i) => i); const st = S.civi || {};
+  const unseen = shuffle(idx.filter((i) => !st['c' + i])); const wrong = shuffle(idx.filter((i) => st['c' + i] && st['c' + i].ko > st['c' + i].ok));
+  const rest = shuffle(idx.filter((i) => !unseen.includes(i) && !wrong.includes(i)));
+  go('civ', { qs: wrong.slice(0, 2).concat(unseen, rest).filter((v, i, a) => a.indexOf(v) === i).slice(0, 5), i: 0, picked: null, right: 0 });
+}
+VIEWS.civ = () => {
+  const c = CIVI[UI.qs[UI.i]]; const n = UI.qs.length;
+  const opts = c.o.map((o, k) => { let cls = ''; if (UI.picked !== null) { if (k === c.a) cls = 'ok'; else if (k === UI.picked) cls = 'ko'; } return `<button class="option ${cls}" data-act="pickCivi" data-arg="${k}" ${UI.picked !== null ? 'disabled' : ''}><span class="letter">${'ABC'[k]}</span><span style="flex:1">${esc(o)}</span></button>`; }).join('');
+  const fb = UI.picked === null ? '' : `<div class="feedback ${UI.picked === c.a ? 'ok' : 'ko'} mt12"><b>${UI.picked === c.a ? 'Exact ! +' + XP.grammar + ' XP' : 'Réponse : ' + esc(c.o[c.a])}</b><span>${esc(c.e)}</span></div>`;
+  return `${progressHead(UI.i, n, 'var(--green)')}
+  <div class="row mt16"><span class="tag green">Civilisation · ${c.p === 'FR' ? 'France' : c.p === 'DE' ? 'Allemagne' : 'franco-allemand'}</span></div>
+  <div class="card mt12" style="padding:22px 20px"><p style="margin:0;font-size:19px;line-height:1.5;font-weight:800">${esc(c.q)}</p></div>
+  <div class="col mt16">${opts}</div>${fb}
+  <div class="mt16">${UI.picked === null ? '<button class="btn" disabled>Choisis une réponse</button>' : `<button class="btn" data-act="nextCivi">${UI.i + 1 < n ? 'Continuer' : 'Terminer'}</button>`}</div>`;
+};
+
+/* --- Mes textes --- */
+VIEWS.addText = () => `${topBar('Ajouter mon texte', 'train')}
+  <div class="card mt12 col">
+    <label class="small" for="mt_titre" style="font-weight:800">Titre</label><input type="text" id="mt_titre" placeholder="Courrier du notaire, extrait de jugement…" autocomplete="off">
+    <label class="small" for="mt_dir" style="font-weight:800">Sens de traduction</label>
+    <select id="mt_dir" style="width:100%;border:2px solid var(--line);border-radius:14px;padding:12px 14px;font-size:16px;background:#fff"><option value="fr_de">Texte français → traduire en allemand</option><option value="de_fr">Texte allemand → traduire en français</option></select>
+    <label class="small" for="mt_src" style="font-weight:800">Texte à traduire</label><textarea id="mt_src" style="min-height:200px" placeholder="Colle ici le texte…"></textarea>
+    <span class="small" style="line-height:1.45">Pense à remplacer les noms, adresses et autres données personnelles de tes clients avant de coller un texte.</span>
+    <button class="btn mt8" data-act="saveMyText">Enregistrer</button>
+  </div>`;
+
 /* --- Entraînement libre et épreuve blanche --- */
 VIEWS.train = () => {
   const tf = UI.tf || 'jur_fr_de';
-  const kinds = [['consult', 'Consultations'], ['jur_fr_de', 'FR → DE juridique'], ['gen_fr_de', 'FR → DE général'], ['jur_de_fr', 'DE → FR juridique'], ['gen_de_fr', 'DE → FR général'], ['essai', 'Essais']];
+  const kinds = [['mine', 'Mes textes'], ['consult', 'Consultations'], ['jur_fr_de', 'FR → DE juridique'], ['gen_fr_de', 'FR → DE général'], ['jur_de_fr', 'DE → FR juridique'], ['gen_de_fr', 'DE → FR général'], ['essai', 'Essais']];
   const doneIds = new Set(S.texts.filter((e) => e.status !== 'draft').map((e) => e.kind + ':' + e.taskId));
-  const list = (TEXTS[tf] || []).filter((t) => !t.mock).map((t) => `<button class="option" data-act="startFree" data-arg="${tf}:${t.id}"><span style="flex:1;min-width:0"><span style="display:block;font-weight:800">${esc(t.titre)}</span>${t.expediteur ? `<span class="small">${esc(ROLE_LABEL[t.role])} · ${esc(t.expediteur)}</span>` : t.dom ? `<span class="small">${esc(DOM_LABEL[t.dom])}</span>` : t.consigne ? `<span class="small" style="display:block;line-height:1.35">${esc(t.consigne)}</span>` : ''}</span>${doneIds.has(tf + ':' + t.id) ? `<span class="check">${ICON.check()}</span>` : ICON.chev()}</button>`).join('');
+  const src = tf === 'mine' ? (S.myTexts || []).map((t) => Object.assign({ k: 'perso_' + t.dir }, t)) : (TEXTS[tf] || []).filter((t) => !t.mock).map((t) => Object.assign({ k: tf }, t));
+  const list = (tf === 'mine' ? '<button class="btn sm soft" data-act="nav" data-arg="addText">+ Ajouter un texte</button>' + (src.length ? '' : '<p class="small" style="text-align:center">Colle un texte de ton travail pour le traduire comme exercice.</p>') : '') + src.map((t) => `<div class="row" style="gap:6px"><button class="option" style="flex:1" data-act="startFree" data-arg="${t.k}:${t.id}"><span style="flex:1;min-width:0"><span style="display:block;font-weight:800">${esc(t.titre)}</span>${t.dir ? `<span class="small">${t.dir === 'fr_de' ? 'FR → DE' : 'DE → FR'}</span>` : t.expediteur ? `<span class="small">${esc(ROLE_LABEL[t.role])} · ${esc(t.expediteur)}</span>` : t.dom ? `<span class="small">${esc(DOM_LABEL[t.dom])}</span>` : t.consigne ? `<span class="small" style="display:block;line-height:1.35">${esc(t.consigne)}</span>` : ''}</span>${doneIds.has(t.k + ':' + t.id) ? `<span class="check">${ICON.check()}</span>` : ICON.chev()}</button>${tf === 'mine' ? `<button class="iconbtn" data-act="delMyText" data-arg="${t.id}" aria-label="Supprimer ce texte" style="color:var(--faint)">${ICON.close()}</button>` : ''}</div>`).join('');
   const mocks = S.texts.filter((e) => e.mock && e.status !== 'draft').slice(-5).reverse();
   return `${topBar('Entraînement', 'home')}
+  <button class="mission mt12" data-act="nav" data-arg="oral"><div class="mico" style="background:var(--plum-soft)">${ICON.swap('#7A3E9D')}</div><div style="flex:1"><div class="mtitle">Oral</div><div class="msub">Traduction à vue et entretien, en dictée</div></div>${ICON.chev()}</button>
+  <button class="mission mt8" data-act="startCivi"><div class="mico" style="background:var(--green-soft)">${ICON.flag()}</div><div style="flex:1"><div class="mtitle">Quiz de civilisation</div><div class="msub">France, Allemagne, franco-allemand</div></div>${ICON.chev()}</button>
   <div class="card dark mt12 col" style="gap:10px">
     <span class="h3" style="color:#fff">Épreuve blanche</span>
     <span style="font-size:13px;line-height:1.45;color:#D4D6F0;font-weight:600">Comme à l'examen du Bade-Wurtemberg : textes longs, chrono officiel (90 minutes, 180 pour l'essai), aucun dictionnaire. Le mieux : sur papier, puis photo pour Claude.</span>
@@ -818,6 +912,8 @@ VIEWS.progres = () => {
     <div class="cal" style="font-size:11px;font-weight:800;color:var(--muted);margin-bottom:2px">${['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((l) => `<span>${l}</span>`).join('')}</div>
     <div class="cal">${cells}</div>
   </div>
+  ${Object.keys(S.weak || {}).length ? `<div class="h2 mt16">Mes points faibles</div><p class="small" style="margin:6px 0 0">D'après les corrections de Claude. Les exercices de grammaire en tiennent compte.</p>
+  <div class="card mt8 col" style="gap:10px">${topWeak(5).map((c) => `<div class="between" style="gap:10px"><div><div style="font-weight:800">${esc(c)}</div><div class="small">${plur(S.weak[c], 'fois', 'fois')}</div></div>${RULES[c] ? `<button class="btn sm soft" style="width:auto" data-act="trainWeak" data-arg="${esc(c)}">S'entraîner</button>` : c === 'Vocabulaire juridique' ? `<button class="btn sm soft" style="width:auto" data-act="startVocab">Vocabulaire</button>` : ''}</div>`).join('')}</div>` : ''}
   <div class="h2 mt16">Compétences</div>
   <div class="card mt8 col" style="gap:12px">
     ${bar('Vocabulaire juridique', learned + ' acquis · ' + seen + ' vus', words.length ? learned / words.length * 100 : 0, 'var(--green)')}
@@ -858,13 +954,31 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
     </details>
   </div>
   <div class="card mt12 col">
+    <span class="h3">Rappel quotidien</span>
+    <span class="small" style="line-height:1.45">Ajoute un rendez-vous quotidien dans le calendrier de l'iPhone, avec une alerte, pour ne pas casser la série d'étoiles.</span>
+    <label class="small" for="remindTime" style="font-weight:800">Heure</label>
+    <input type="time" id="remindTime" value="${esc(S.remind || '19:00')}" data-input="remind" style="width:100%;border:2px solid var(--line);border-radius:14px;padding:12px 14px;font-size:16px;background:#fff">
+    <button class="btn soft sm" data-act="addReminder">Ajouter le rappel au calendrier</button>
+  </div>
+  <div class="card mt12 col">
+    <span class="h3">Synchronisation</span>
+    ${SYNC.code ? `<span class="small" style="line-height:1.45">Active. Code de synchronisation (à saisir sur un autre appareil) :</span><span style="font-weight:900;word-break:break-all">${esc(SYNC.code)}</span><span class="small" id="syncStatus">${esc(syncStatusText())}</span>
+      <div class="grid2"><button class="btn soft sm" data-act="syncNow">Synchroniser</button><button class="btn ghost sm" data-act="syncOff">Désactiver</button></div>`
+    : `<span class="small" style="line-height:1.45">Sauvegarde automatique en ligne, gratuite, dans ton propre projet Firebase (mode d'emploi dans le fichier LISEZMOI).</span>
+      <label class="small" for="fb_key" style="font-weight:800">Clé API Firebase (apiKey)</label><input type="text" id="fb_key" autocomplete="off" autocapitalize="none" value="${esc(SYNC.apiKey || '')}">
+      <label class="small" for="fb_pid" style="font-weight:800">Identifiant du projet (projectId)</label><input type="text" id="fb_pid" autocomplete="off" autocapitalize="none" value="${esc(SYNC.projectId || '')}">
+      <button class="btn sm" data-act="syncNew">Activer (premier appareil)</button>
+      <label class="small" for="fb_code" style="font-weight:800">Ou code d'un autre appareil</label><input type="text" id="fb_code" autocomplete="off" autocapitalize="none">
+      <button class="btn ghost sm" data-act="syncJoin">Récupérer mes données</button>`}
+  </div>
+  <div class="card mt12 col">
     <span class="h3">Installer sur l'iPhone</span>
     <span class="small" style="line-height:1.45">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». LexRhin s'ouvre alors comme une vraie appli, même hors connexion.</span>
   </div>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">LexRhin · version 1.7</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.8</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
@@ -876,6 +990,14 @@ function render() {
   $('#app').classList.toggle('no-tabs', !showTabs);
   $('#tabbar').innerHTML = showTabs ? `<div class="tabbar"><nav>${[['home', 'Accueil', ICON.home()], ['lexique', 'Lexique', ICON.book()], ['progres', 'Progrès', ICON.chart()], ['profil', 'Profil', ICON.user()]].map(([k, l, ic]) => `<button class="tab ${v === k ? 'on' : ''}" data-act="nav" data-arg="${k}">${ic}${l}</button>`).join('')}</nav></div>` : '';
   if ((v === 'vocab' || v === 'test' || v === 'grammar') && !UI.res) { const a = $('#ans'); if (a) { try { a.focus({ preventScroll: true }); } catch (e) { } } }
+  if (v === 'sight') {
+    const e = entryById(UI.id);
+    timerHandle = setInterval(() => {
+      const el = $('#timer');
+      if (UI.phase === 'read') { UI.left = Math.max(0, UI.left - 1); if (el) el.textContent = fmtTime(UI.left); if (UI.left === 0) { toast('Temps de lecture écoulé : à toi !'); ACT.sightSpeak(); } }
+      else { e.seconds = (e.seconds || 0) + 1; if (el) el.textContent = fmtTime(e.seconds); if (e.seconds % 15 === 0) save(); }
+    }, 1000);
+  }
   if (v === 'write') { // chrono pour les traductions
     const e = entryById(UI.id);
     if (e) {
@@ -939,7 +1061,7 @@ const ACT = {
     go('bravo', { b: { title: 'Test terminé : ' + UI.right + '/' + UI.qs.length, sub: UI.right >= 20 ? 'Superbe semaine !' : UI.right >= 15 ? 'Très bien, continue comme ça.' : 'Les mots ratés reviennent en révision dès demain.', stats: [{ v: UI.right + '/' + UI.qs.length, l: 'score', gold: true }, { v: S.tests.length, l: 'tests passés' }, { v: totalStars(), l: 'étoiles' }], newStar: false, next: null } });
   },
   openText: () => openText(),
-  beginText: () => { const e = startNewEntry(UI.kind, TEXTS[UI.kind].find((t) => t.id === UI.taskId), UI.mock || UI.free ? null : UI.pair, { mock: !!UI.mock, free: !!UI.free }); go('write', { id: e.id }); },
+  beginText: () => { const e = startNewEntry(UI.kind, findTask(UI.kind, UI.taskId), UI.mock || UI.free ? null : UI.pair, { mock: !!UI.mock, free: !!UI.free }); go('write', { id: e.id }); },
   beginEssay: (a) => { const e = startNewEntry('essai', TEXTS.essai.find((t) => t.id === a), UI.mock || UI.free ? null : UI.pair, { mock: !!UI.mock, free: !!UI.free }); go('write', { id: e.id }); },
   toggleRwHand: () => { const e = entryById(UI.id); e.rewrite = e.rewrite || { draft: '', status: 'draft' }; e.rewrite.handwritten = !e.rewrite.handwritten; save(); render(); },
   toggleHand: () => { const e = entryById(UI.id); e.handwritten = !e.handwritten; save(); render(); },
@@ -963,11 +1085,12 @@ const ACT = {
   openPaste: (a) => go('paste', { id: a }),
   savePaste: () => {
     const txt = ($('#paste').value || '').trim(); if (txt.length < 20) return toast('Colle la réponse complète de Claude');
-    const e = entryById(UI.id); const { words, score } = parseCorrection(txt);
+    const e = entryById(UI.id); const { words, score, weak } = parseCorrection(txt);
+    S.weak = S.weak || {}; weak.forEach((c) => { S.weak[c] = (S.weak[c] || 0) + 1; });
     const ids = words.map((w) => addCustomWord(w.de, w.fr, w.note)).filter(Boolean);
     const isRw = !!(e.rewrite && e.rewrite.status === 'sent' && e.status === 'corrected');
     if (isRw) { e.rewrite.correction = txt; e.rewrite.score = score; e.rewrite.status = 'corrected'; }
-    else { e.correction = txt; e.score = score; e.words = ids; e.status = 'corrected'; }
+    else { e.correction = txt; e.score = score; e.words = ids; e.weak = weak; e.status = 'corrected'; }
     save();
     if (UI.forRewrite && !isRw) return go('rewrite', { id: e.id, step: ids.length ? 'learn' : 'write' });
     go('correction', { id: e.id, rw: isRw, newIds: ids, parsedNone: !words.length });
@@ -985,6 +1108,20 @@ const ACT = {
   },
   lexFilter: (a) => { UI.filter = a; render(); },
   lexTheme: (a) => { UI.theme = a; render(); },
+  startSight: (a) => startSight(a),
+  startConv: () => startConv(),
+  sightSpeak: () => { UI.phase = 'speak'; render(); const d = $('#draft'); if (d) { try { d.focus(); } catch (e) { } } },
+  startCivi: () => startCivi(),
+  pickCivi: (a) => { if (UI.picked !== null) return; UI.picked = +a; const ci = UI.qs[UI.i]; const ok = UI.picked === CIVI[ci].a; S.civi = S.civi || {}; const st = S.civi['c' + ci] || { ok: 0, ko: 0 }; ok ? st.ok++ : st.ko++; S.civi['c' + ci] = st; if (ok) { UI.right++; addXP(XP.grammar); } save(); render(); },
+  nextCivi: () => { if (UI.i + 1 < UI.qs.length) { UI.i++; UI.picked = null; return render(); } day().c = true; save(); go('bravo', { b: { title: 'Quiz terminé !', sub: 'La civilisation compte pour l’essai et pour l’oral.', stats: [{ v: '+' + UI.right * XP.grammar, l: 'XP', gold: true }, { v: UI.right + '/' + UI.qs.length, l: 'bonnes réponses' }, { v: Object.keys(S.civi).length + '/' + CIVI.length, l: 'questions vues' }], newStar: false, next: null } }); },
+  trainWeak: (a) => go('grammar', { qs: buildGrammarSession(5, a).map((gi) => ({ type: 'g', gi })), i: 0, picked: null, res: null, right: 0 }),
+  saveMyText: () => { const titre = ($('#mt_titre').value || '').trim() || 'Mon texte'; const src = ($('#mt_src').value || '').trim(); if (src.length < 40) return toast('Colle un texte un peu plus long'); S.myTexts = S.myTexts || []; S.myTexts.push({ id: 'm' + Date.now().toString(36), titre, dir: $('#mt_dir').value, source: src }); save(); toast('Texte enregistré'); go('train', { tf: 'mine' }); },
+  delMyText: (a) => { S.myTexts = (S.myTexts || []).filter((t) => t.id !== a); save(); render(); toast('Texte supprimé'); },
+  addReminder: () => addReminder(),
+  syncNew: () => syncSetup(false),
+  syncJoin: () => syncSetup(true),
+  syncNow: () => syncRun(true),
+  syncOff: () => { SYNC = { apiKey: SYNC.apiKey, projectId: SYNC.projectId }; saveSync(); render(); toast('Synchronisation désactivée'); },
   trainTheme: (a) => startVocab(null, null, a),
   toggleFocus: () => { S.focusSucc = S.focusSucc === false; save(); render(); },
   delWord: (a) => { S.custom = S.custom.filter((w) => w.id !== a); delete S.vocab[a]; save(); render(); toast('Mot supprimé'); },
@@ -1021,6 +1158,69 @@ function gradeConj(typed) {
   S.conj = S.conj || {}; const k = it.verb + ':' + it.tense; const st = S.conj[k] || { ok: 0, ko: 0 }; c.ok ? st.ok++ : st.ko++; S.conj[k] = st;
   if (c.ok) { UI.right++; addXP(XP.grammar); } save(); render();
 }
+function addReminder() {
+  const [h, m] = (S.remind || '19:00').split(':');
+  const d = new Date(); const start = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + 'T' + pad(+h) + pad(+m) + '00';
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  const url = location.href.split('#')[0];
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//LexRhin//FR', 'BEGIN:VEVENT', 'UID:lexrhin-rappel-quotidien', 'DTSTAMP:' + stamp, 'DTSTART:' + start, 'DURATION:PT30M', 'RRULE:FREQ=DAILY', 'SUMMARY:LexRhin · séance du jour', 'DESCRIPTION:Vocabulaire\, grammaire et texte du jour : ' + url, 'URL:' + url, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:LexRhin', 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const a = document.createElement('a'); a.href = 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics); a.download = 'lexrhin-rappel.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast('Ouvre le fichier pour l’ajouter au calendrier');
+}
+
+/* ---------- Synchronisation Firebase (REST, authentification anonyme) ---------- */
+const SYNC_KEY = 'lexrhin.sync';
+let SYNC = (() => { try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch (e) { return {}; } })();
+function saveSync() { try { localStorage.setItem(SYNC_KEY, JSON.stringify(SYNC)); } catch (e) { } }
+function syncStatusText() { return SYNC.error ? 'Erreur : ' + SYNC.error : SYNC.last ? 'Dernière synchronisation : ' + new Date(SYNC.last).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'Pas encore synchronisé'; }
+async function fbToken() {
+  if (SYNC.idToken && Date.now() < (SYNC.exp || 0) - 60000) return SYNC.idToken;
+  if (SYNC.refreshToken) {
+    const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(SYNC.apiKey), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(SYNC.refreshToken) });
+    if (r.ok) { const j = await r.json(); SYNC.idToken = j.id_token; SYNC.refreshToken = j.refresh_token; SYNC.exp = Date.now() + (+j.expires_in) * 1000; saveSync(); return SYNC.idToken; }
+  }
+  const r = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + encodeURIComponent(SYNC.apiKey), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnSecureToken: true }) });
+  if (!r.ok) throw new Error('connexion Firebase refusée (vérifie la clé et l’authentification anonyme)');
+  const j = await r.json(); SYNC.idToken = j.idToken; SYNC.refreshToken = j.refreshToken; SYNC.exp = Date.now() + (+j.expiresIn) * 1000; saveSync(); return SYNC.idToken;
+}
+function docUrl() { return 'https://firestore.googleapis.com/v1/projects/' + encodeURIComponent(SYNC.projectId) + '/databases/(default)/documents/lexrhin/' + encodeURIComponent(SYNC.code); }
+async function pushSync() {
+  const t = await fbToken();
+  const body = { fields: { data: { stringValue: JSON.stringify(S) }, updated: { integerValue: String(S.updated || Date.now()) } } };
+  const r = await fetch(docUrl(), { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('envoi refusé (' + r.status + ')');
+  SYNC.last = Date.now(); SYNC.error = ''; saveSync();
+}
+async function pullSync(force) {
+  const t = await fbToken();
+  const r = await fetch(docUrl(), { headers: { Authorization: 'Bearer ' + t } });
+  if (r.status === 404) return 'empty';
+  if (!r.ok) throw new Error('lecture refusée (' + r.status + ')');
+  const j = await r.json(); const remote = +(((j.fields || {}).updated || {}).integerValue || 0);
+  if (force || remote > (S.updated || 0)) { S = Object.assign(defaults(), JSON.parse(j.fields.data.stringValue)); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { } SYNC.last = Date.now(); SYNC.error = ''; saveSync(); return 'pulled'; }
+  return remote < (S.updated || 0) ? 'local-newer' : 'same';
+}
+let syncTimer = null; let syncBusy = false;
+async function syncRun(manual) {
+  if (!SYNC.code || syncBusy) return; syncBusy = true;
+  try { const res = await pullSync(false); if (res === 'pulled') render(); else if (res !== 'same') await pushSync(); if (manual) toast('Synchronisé'); }
+  catch (err) { SYNC.error = err.message || 'hors connexion'; saveSync(); if (manual) toast('Synchronisation impossible : ' + SYNC.error); }
+  finally { syncBusy = false; const st = $('#syncStatus'); if (st) st.textContent = syncStatusText(); }
+}
+function schedulePush() { if (!SYNC.code) return; clearTimeout(syncTimer); syncTimer = setTimeout(() => { if (syncBusy) return schedulePush(); syncBusy = true; pushSync().catch((err) => { SYNC.error = err.message; saveSync(); }).finally(() => { syncBusy = false; }); }, 4000); }
+async function syncSetup(join) {
+  const apiKey = ($('#fb_key').value || '').trim(), projectId = ($('#fb_pid').value || '').trim();
+  if (!apiKey || !projectId) return toast('Renseigne la clé API et l’identifiant du projet');
+  let code = join ? ($('#fb_code').value || '').trim() : Array.from(crypto.getRandomValues(new Uint8Array(24))).map((b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+  if (join && code.length < 16) return toast('Le code de synchronisation est trop court');
+  SYNC = { apiKey, projectId, code }; saveSync();
+  try {
+    if (join) { const res = await pullSync(true); if (res === 'empty') throw new Error('aucune donnée trouvée pour ce code'); toast('Données récupérées'); }
+    else { S.updated = Date.now(); save(); await pushSync(); toast('Synchronisation activée'); }
+  } catch (err) { SYNC.error = err.message; saveSync(); toast('Erreur : ' + err.message); }
+  render();
+}
 function copy(text) {
   const fallback = () => {
     const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
@@ -1041,16 +1241,18 @@ document.addEventListener('submit', (ev) => {
 });
 document.addEventListener('input', (ev) => {
   const el = ev.target; const k = el.dataset && el.dataset.input; if (!k) return;
-  if (k === 'draft') { const e = entryById(UI.id); e.draft = el.value; const n = wordCount(el.value); $('#wc').textContent = n + ' mot' + (n > 1 ? 's' : '') + (e.kind === 'redaction' ? ' · objectif 150 à 200' : ''); save(); }
+  if (k === 'draft') { const e = entryById(UI.id); e.draft = el.value; const n = wordCount(el.value); $('#wc').textContent = n + ' mot' + (n > 1 ? 's' : ''); save(); }
   else if (k === 'rwdraft') { const e = entryById(UI.id); e.rewrite = e.rewrite || { draft: '', status: 'draft' }; e.rewrite.draft = el.value; $('#wc').textContent = wordCount(el.value) + ' mots'; save(); }
   else if (k === 'name') { S.name = el.value.trim(); save(); }
+  else if (k === 'remind') { S.remind = el.value; save(); }
   else if (k === 'q') { UI.q = el.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(); }
   else if (k === 'theme') { UI.theme = el.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(); }
 });
 document.addEventListener('change', (ev) => { const el = ev.target; if (el && el.tagName === 'SELECT' && el.dataset.input === 'theme') { UI.theme = el.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(); } });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && TAB_VIEWS.includes(UI.view)) render(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (TAB_VIEWS.includes(UI.view)) render(); syncRun(false); } });
 
 render();
+syncRun(false);
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && window.self === window.top) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => { }); });
