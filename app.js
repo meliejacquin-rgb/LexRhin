@@ -228,7 +228,7 @@ const ICON = {
   chart: () => `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path></svg>`,
   user: () => `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>`
 };
-const LOGO = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 100 100" role="img" aria-label="Logo LexRhin"><rect width="100" height="100" rx="22" fill="#F5B301"></rect><text x="50" y="62" text-anchor="middle" font-family="Nunito, Inter, system-ui, sans-serif" font-weight="900" font-size="58" fill="#1F2147">§</text><path d="M18 80 q8 -6 16 0 t16 0 t16 0 t16 0" fill="none" stroke="#1F2147" stroke-width="4.5" stroke-linecap="round"></path></svg>`;
+const LOGO = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 100 100" role="img" aria-label="Logo LexRhin"><defs><clipPath id="lrclip"><rect width="100" height="100" rx="22"></rect></clipPath></defs><g clip-path="url(#lrclip)"><rect width="100" height="100" fill="#1F2147"></rect><path d="M0 70 q12.5 -9 25 0 t25 0 t25 0 t25 0 V100 H0 Z" fill="#4250C9"></path><path d="M1086 1108C1084 1338 895 1510 620 1510C348 1510 160 1341 160 1114C160 989 215 896 296 818C252 806 142 788 126 654C95 419 287 335 370 306L646 204C689 186 764 148 766 96C764 49 700 35 648 32C546 23 494 58 494 116H152C152 -134 348 -300 642 -300C921 -300 1114 -143 1114 96C1114 218 1064 311 974 390L980 392C1015 401 1131 425 1150 556C1180 788 985 873 908 902L632 1006C581 1018 506 1056 506 1114C506 1181 578 1182 620 1182C697 1182 741 1149 742 1108ZM832 530C820 506 802 500 768 512L544 588C456 617 427 657 440 680C450 701 468 710 512 696L728 622C820 591 843 556 832 530Z" fill="#F5B301" transform="matrix(0.03425 0 0 -0.03425 28.149 57.724)"></path></g></svg>`;
 
 function marmot(size, mood) {
   const ears = '<circle cx="36" cy="24" r="9" fill="#7A4F31"/><circle cx="84" cy="24" r="9" fill="#7A4F31"/><circle cx="36" cy="24" r="4.5" fill="#E9CFAE"/><circle cx="84" cy="24" r="4.5" fill="#E9CFAE"/>';
@@ -621,7 +621,7 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">LexRhin · version 1.3</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.4</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
