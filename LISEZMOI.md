@@ -19,5 +19,5 @@ Appli d'entraînement quotidien au français juridique pour préparer l'examen d
 
 - Les progrès sont enregistrés **sur le téléphone**. Dans Profil, « Exporter ma sauvegarde » de temps en temps.
 - Si l'appli est supprimée de l'écran d'accueil, ses données le sont aussi : exporter avant.
-- Mise à jour : remplacer les fichiers sur GitHub et changer `VERSION` en haut de `sw.js` (par ex. `lexrhin-v1.5`).
+- Mise à jour : remplacer les fichiers sur GitHub et changer `VERSION` en haut de `sw.js` (par ex. `lexrhin-v1.7`).
 - Ajouter du contenu : `data.js` (vocabulaire, grammaire, sujets de textes). On peut ajouter des lignes à la fin de chaque liste sans perdre la progression.

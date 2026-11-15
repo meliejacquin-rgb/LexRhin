@@ -23,11 +23,21 @@ function orderPair(a, b) { return (looksFrench(a) + looksGerman(b)) > (looksGerm
 
 const INTERVALS = [0, 1, 2, 4, 8, 16, 32]; // jours, par boîte (répétition espacée)
 const LEVELS = [
-  [0, 'Stagiaire'], [500, 'Lectrice attentive'], [1500, 'Juriste linguiste'], [3000, 'Traductrice en herbe'],
-  [5500, 'Traductrice confirmée'], [9000, 'Experte franco-allemande'], [14000, 'Plume du Rhin'], [20000, 'Prête pour l\'examen']
+  [0, 'Stagiaire'], [800, 'Lectrice attentive'], [2500, 'Apprentie juriste-linguiste'], [5000, 'Juriste linguiste'],
+  [8500, 'Traductrice en herbe'], [13000, 'Traductrice appliquée'], [19000, 'Traductrice confirmée'], [26000, 'Experte franco-allemande'],
+  [34000, 'Plume du Rhin'], [43000, 'Dompteuse de faux amis'], [55000, 'Candidate à l\'examen'], [68000, 'Prête pour l\'examen']
 ];
-const KIND_ORDER = ['redaction', 'trad_de_fr', 'trad_fr_de'];
-const KIND_LABEL = { redaction: 'Rédaction en français', trad_de_fr: 'Traduction allemand → français', trad_fr_de: 'Traduction français → allemand' };
+// Les 5 épreuves écrites de l'examen (Bade-Wurtemberg), dans l'ordre de rotation du texte du jour
+const KIND_ORDER = ['essai', 'gen_fr_de', 'jur_fr_de', 'gen_de_fr', 'jur_de_fr'];
+const KIND_LABEL = {
+  essai: 'Épreuve 1 · Essai en français', gen_fr_de: 'Épreuve 2 · Texte général FR → DE', jur_fr_de: 'Épreuve 3 · Texte juridique FR → DE',
+  gen_de_fr: 'Épreuve 4 · Texte général DE → FR', jur_de_fr: 'Épreuve 5 · Texte juridique DE → FR',
+  redaction: 'Rédaction en français', trad_de_fr: 'Traduction allemand → français', trad_fr_de: 'Traduction français → allemand'
+};
+const KIND_SHORT = { essai: 'Essai en français', gen_fr_de: 'Traduction FR → DE (général)', jur_fr_de: 'Traduction FR → DE (juridique)', gen_de_fr: 'Traduction DE → FR (général)', jur_de_fr: 'Traduction DE → FR (juridique)', redaction: 'Rédaction', trad_de_fr: 'Traduction DE → FR', trad_fr_de: 'Traduction FR → DE' };
+const KIND_INFO = { essai: { mins: 180, into: 'fr' }, gen_fr_de: { mins: 90, from: 'fr', into: 'de' }, jur_fr_de: { mins: 90, from: 'fr', into: 'de' }, gen_de_fr: { mins: 90, from: 'de', into: 'fr' }, jur_de_fr: { mins: 90, from: 'de', into: 'fr' }, redaction: { into: 'fr' }, trad_de_fr: { from: 'de', into: 'fr' }, trad_fr_de: { from: 'fr', into: 'de' } };
+const DOM_LABEL = { prive: 'Droit privé', penal: 'Droit pénal', public: 'Droit public' };
+const isTradKind = (k) => !!(KIND_INFO[k] || {}).from;
 const XP = { vocab: 8, hint: 4, grammar: 10, text: 40, rewrite: 30 };
 
 /* ---------- État ---------- */
@@ -35,7 +45,7 @@ function defaults() {
   return {
     v: 1, name: 'Selina', vocabSize: 10, xp: 0,
     vocab: {}, custom: [], grammar: {}, days: {}, texts: [], kindNext: { redaction: 0, trad_de_fr: 0, trad_fr_de: 0 }, kindTurn: 0,
-    tests: [], created: today()
+    tests: [], created: today(), domains: DOMAINS.map((d) => d.id), focusSucc: true
   };
 }
 let S = load();
@@ -67,17 +77,31 @@ function level() {
 /* ---------- Vocabulaire ---------- */
 function allWords() {
   const bank = VOCAB.map((w, i) => ({ id: 'v:' + slug(w[0]), de: w[0], fr: w[1], note: w[2] || '', theme: w[3], order: i }));
-  const cust = S.custom.map((w, i) => ({ id: w.id, de: w.de, fr: w.fr, note: w.note || '', theme: 'perso', order: -1000 + i, custom: true }));
+  const cust = S.custom.map((w, i) => ({ id: w.id, de: w.de, fr: w.fr, note: w.note || '', theme: w.theme && THEMES[w.theme] ? w.theme : 'perso', order: -1000 + i, custom: true }));
   return cust.concat(bank);
 }
 function wstate(id) { return S.vocab[id] || null; }
 function isDue(id) { const s = wstate(id); return s && s.due <= today(); }
-function buildVocabSession(size, onlyIds) {
-  const words = allWords();
-  if (onlyIds) return words.filter((w) => onlyIds.includes(w.id));
+function enabledThemes() {
+  const set = new Set(['perso']);
+  DOMAINS.forEach((d) => { if ((S.domains || []).includes(d.id)) d.themes.forEach((t) => set.add(t)); });
+  if (set.size === 1) DOMAINS.forEach((d) => d.themes.forEach((t) => set.add(t)));
+  return set;
+}
+function buildVocabSession(size, onlyIds, theme) {
+  if (onlyIds) return allWords().filter((w) => onlyIds.includes(w.id));
+  const themes = enabledThemes();
+  const words = allWords().filter((w) => theme ? w.theme === theme : (themes.has(w.theme) || (w.custom && w.theme !== 'perso')));
   const due = words.filter((w) => isDue(w.id)).sort((a, b) => S.vocab[a.id].due.localeCompare(S.vocab[b.id].due));
-  // nouveaux mots : d'abord ceux ajoutés depuis les corrections, puis la banque
-  const fresh = words.filter((w) => !wstate(w.id)).sort((a, b) => a.order - b.order);
+  // nouveaux mots : d'abord ceux des corrections, puis un mot de chaque thème à tour de rôle
+  const rank = {}; const count = {}; const tOrder = Object.keys(THEMES);
+  words.forEach((w) => { if (w.custom) { rank[w.id] = -100000 + w.order; return; } count[w.theme] = (count[w.theme] || 0) + 1; rank[w.id] = count[w.theme] * 100 + tOrder.indexOf(w.theme); });
+  let fresh = words.filter((w) => !wstate(w.id)).sort((a, b) => rank[a.id] - rank[b.id]);
+  if (S.focusSucc !== false && !theme) { // mise en avant : un nouveau mot sur deux vient des successions
+    const succ = fresh.filter((w) => w.theme === FOCUS_THEME && !w.custom), cust = fresh.filter((w) => w.custom), other = fresh.filter((w) => w.theme !== FOCUS_THEME && !w.custom);
+    const mixed = []; while (succ.length || other.length) { if (succ.length) mixed.push(succ.shift()); if (other.length) mixed.push(other.shift()); }
+    fresh = cust.concat(mixed);
+  }
   const nReview = Math.min(due.length, Math.max(4, size - fresh.length));
   let picked = due.slice(0, nReview).concat(fresh.slice(0, size - nReview));
   if (picked.length < size) picked = picked.concat(due.slice(nReview, nReview + size - picked.length));
@@ -142,7 +166,7 @@ function gradeWord(id, ok) {
   else { s.ko++; s.box = 1; s.due = addDays(today(), 1); }
   S.vocab[id] = s;
 }
-function addCustomWord(de, fr, note) {
+function addCustomWord(de, fr, note, theme) {
   de = (de || '').trim(); fr = (fr || '').trim(); note = (note || '').trim();
   if (!de || !fr) return null;
   const all = allWords(); const found = all.find((w) => w.de.toLowerCase() === de.toLowerCase());
@@ -151,7 +175,7 @@ function addCustomWord(de, fr, note) {
     return found.id;
   }
   const id = 'c:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  S.custom.push({ id, de, fr, note, added: today() });
+  S.custom.push({ id, de, fr, note, theme: theme && THEMES[theme] ? theme : undefined, added: today() });
   return id;
 }
 
@@ -176,33 +200,46 @@ function gradeGrammar(i, ok) {
 function lastEntry() { return S.texts.length ? S.texts[S.texts.length - 1] : null; }
 function entryById(id) { return S.texts.find((e) => e.id === id); }
 function taskOf(e) { return TEXTS[e.kind].find((t) => t.id === e.taskId); }
+function tasksFor(kind) {
+  const all = (TEXTS[kind] || []).filter((t) => !t.mock);
+  const list = all.filter((t) => !t.dom || (S.domains || []).includes(t.dom));
+  return list.length ? list : all;
+}
 function pairInfo(k) {
   k = k || today();
   const dd = Math.max(0, Math.round((parseKey(k) - parseKey(S.created || k)) / 86400000));
-  const n = Math.floor(dd / 2); const kind = KIND_ORDER[n % KIND_ORDER.length]; const list = TEXTS[kind];
-  return { n, dayB: dd % 2 === 1, kind, task: list[Math.floor(n / KIND_ORDER.length) % list.length] };
+  const n = Math.floor(dd / 2); const kind = KIND_ORDER[n % KIND_ORDER.length]; const list = tasksFor(kind);
+  const round = Math.floor(n / KIND_ORDER.length);
+  const topics = kind === 'essai' ? [0, 1, 2].map((i) => list[(round * 3 + i) % list.length]) : null;
+  return { n, dayB: dd % 2 === 1, kind, task: topics ? topics[0] : list[round % list.length], topics };
 }
 function todaysText() {
   // chaque texte dure 2 jours : jour 1 on l'écrit, jour 2 on le réécrit après la correction
   const p = pairInfo(); const e = S.texts.find((x) => x.pair === p.n);
-  const base = { kind: p.kind, task: p.task, pair: p.n, dayB: p.dayB };
+  const base = { kind: p.kind, task: p.task, topics: p.topics, pair: p.n, dayB: p.dayB };
   if (!e) return Object.assign(base, { mode: 'new' });
+  base.task = taskOf(e) || base.task;
   if (e.status === 'draft' || !p.dayB || e.date === today()) return Object.assign(base, { mode: 'new', entry: e });
   return Object.assign(base, { mode: 'rewrite', entry: e });
 }
-function startNewEntry(kind, task, pair) {
-  const e = { id: 'e' + Date.now().toString(36), kind, taskId: task.id, pair, date: today(), draft: '', status: 'draft', correction: '', score: null, words: [], seconds: 0 };
+function startNewEntry(kind, task, pair, extra) {
+  const e = Object.assign({ id: 'e' + Date.now().toString(36), kind, taskId: task.id, pair, date: today(), draft: '', status: 'draft', correction: '', score: null, words: [], seconds: 0 }, extra || {});
   S.texts.push(e); save(); return e;
 }
 function claudePrompt(e, isRewrite) {
-  const t = taskOf(e);
-  const lines = ["Bonjour Claude ! Je prépare l'examen d'État de traductrice français/allemand (Staatliche Prüfung, spécialité droit). Ma langue maternelle est l'allemand.", ''];
+  const t = taskOf(e); const info = KIND_INFO[e.kind] || {};
+  const hand = isRewrite ? !!(e.rewrite && e.rewrite.handwritten) : !!e.handwritten;
+  const lines = ["Bonjour Claude ! Je prépare la Staatliche Prüfung für Übersetzer (Bade-Wurtemberg), langue française, spécialité droit. Ma langue maternelle est l'allemand.", ''];
   if (isRewrite) lines.push("Voici la réécriture de mon texte, après ta première correction. Dis-moi les erreurs qui restent.", '');
-  lines.push('Exercice : ' + KIND_LABEL[e.kind] + ' — ' + t.titre);
-  if (t.consigne) lines.push('Consigne : ' + t.consigne);
-  if (t.source) lines.push('Texte source :', '"""', t.source, '"""');
-  lines.push('', isRewrite ? 'Ma réécriture :' : 'Mon texte :', '"""', isRewrite ? e.rewrite.draft : e.draft, '"""', '');
-  lines.push('Merci de corriger en respectant ce format :',
+  lines.push('Exercice : ' + (KIND_LABEL[e.kind] || '') + ' — ' + t.titre + (e.mock ? ' (épreuve blanche, conditions d’examen)' : ''));
+  if (t.consigne) lines.push((e.kind === 'essai' ? 'Sujet : ' : 'Consigne : ') + t.consigne);
+  if (t.source) lines.push('Texte source (' + (info.from === 'de' ? 'allemand' : 'français') + ') :', '"""', t.source, '"""');
+  const draft = isRewrite ? e.rewrite.draft : e.draft;
+  if (hand) lines.push('', (isRewrite ? 'Ma réécriture' : 'Mon texte') + " est manuscrit : il est sur la photo jointe. Commence par le transcrire fidèlement, sans rien corriger, puis corrige-le.", '');
+  else lines.push('', isRewrite ? 'Ma réécriture :' : (info.from ? 'Ma traduction :' : 'Mon texte :'), '"""', draft, '"""', '');
+  lines.push("Évalue comme à l'examen : exactitude du sens, terminologie" + (e.kind && e.kind.startsWith('jur') ? ' juridique' : '') + ", correction de la langue, style et adaptation au type de texte" + (e.kind === 'essai' ? ', ainsi que le contenu, l’argumentation et la structure' : '') + '.');
+  if (info.into === 'de') lines.push("La traduction est vers l'allemand, ma langue maternelle : sois exigeant sur le style et les tournures allemandes.");
+  lines.push('', 'Merci de répondre en respectant ce format :',
     '1. Ma version corrigée complète.',
     '2. Les erreurs, classées (grammaire, registre, lexique, sens), avec une explication courte pour chacune.',
     '3. Une note indicative sur 20, écrite « Note : X/20 ».',
@@ -320,12 +357,12 @@ VIEWS.home = () => {
   const vocabDue = allWords().filter((w) => isDue(w.id)).length;
   const textSub = tt.mode === 'rewrite'
     ? 'Jour 2 · ' + (tt.entry.status === 'sent' ? 'colle d’abord la correction de Claude' : esc(tt.task.titre))
-    : (tt.dayB ? 'Jour 2 · ' : 'Jour 1 · ') + esc(KIND_LABEL[tt.kind]) + ' · ' + esc(tt.task.titre);
+    : (tt.dayB ? 'Jour 2 · ' : 'Jour 1 · ') + esc(KIND_SHORT[tt.kind]) + ' · ' + (tt.kind === 'essai' && !tt.entry ? '3 sujets au choix' : esc(tt.task.titre));
   const mission = (act, ico, bg, title, sub, done, active) => `<button class="mission ${active ? 'active' : ''}" data-act="${act}"><div class="mico" style="background:${bg}">${ico}</div><div style="flex:1;min-width:0"><div class="mtitle">${title}</div><div class="msub">${sub}</div></div>${done ? `<div class="check">${ICON.check()}</div>` : active ? '<span class="go">Go</span>' : ICON.chev()}</button>`;
   const firstTodo = !d.v ? 'v' : !d.g ? 'g' : !d.t ? 't' : null;
-  let missions = mission('startVocab', ICON.cards('#1E7A4E'), 'var(--green-soft)', 'Vocabulaire', `${S.vocabSize} mots · ${plur(Math.min(vocabDue, S.vocabSize), 'révision')}`, d.v, firstTodo === 'v')
+  let missions = mission('startVocab', ICON.cards('#1E7A4E'), 'var(--green-soft)', 'Vocabulaire', `${S.vocabSize} mots · ${plur(Math.min(vocabDue, S.vocabSize), 'révision')}${S.focusSucc !== false ? ' · ★ successions' : ''}`, d.v, firstTodo === 'v')
     + mission('startGrammar', ICON.grammar('#3442B8'), 'var(--indigo-soft)', 'Grammaire', '5 questions', d.g, firstTodo === 'g')
-    + mission('openText', tt.kind === 'redaction' || tt.mode === 'rewrite' ? ICON.pen('#B45309') : ICON.swap('#7A3E9D'), tt.kind === 'redaction' || tt.mode === 'rewrite' ? 'var(--amber-soft)' : 'var(--plum-soft)', tt.mode === 'rewrite' ? 'Réécriture' : 'Texte du jour', textSub, d.t, firstTodo === 't');
+    + mission('openText', !isTradKind(tt.kind) || tt.mode === 'rewrite' ? ICON.pen('#B45309') : ICON.swap('#7A3E9D'), !isTradKind(tt.kind) || tt.mode === 'rewrite' ? 'var(--amber-soft)' : 'var(--plum-soft)', tt.mode === 'rewrite' ? 'Réécriture' : 'Texte du jour', textSub, d.t, firstTodo === 't');
   if (isSunday()) missions += `<button class="mission darkm" data-act="startTest"><div class="mico" style="background:var(--ink2)">${ICON.trophy('#F5B301')}</div><div style="flex:1"><div class="mtitle">Test du dimanche</div><div class="msub">20 mots + 5 questions · bonus ×2 XP</div></div>${d.test ? `<div class="check">${ICON.check()}</div>` : '<span style="font-size:12px;font-weight:800;color:#F5B301">×2 XP</span>'}</button>`;
 
   const pending = S.texts.filter((e) => (e.status === 'sent') || (e.rewrite && e.rewrite.status === 'sent' && !e.rewrite.correction && !e.rewrite.skipped));
@@ -351,12 +388,13 @@ VIEWS.home = () => {
   ${pendingCard}
   <div class="between mt16" style="margin-bottom:8px"><span class="h2">Mission du jour</span><span class="small">${doneCount} / 3 faite${doneCount > 1 ? 's' : ''}</span></div>
   <div class="col">${missions}</div>
-  <div class="row small mt12" style="gap:8px">${ICON.flag()}<span>Objectif : examen d'État de traductrice FR/DE · spécialité droit</span></div>`;
+  <button class="mission mt8" data-act="nav" data-arg="train"><div class="mico" style="background:var(--plum-soft)">${ICON.trophy('#7A3E9D')}</div><div style="flex:1"><div class="mtitle">Entraînement libre</div><div class="msub">Textes au choix · épreuve blanche chronométrée</div></div>${ICON.chev()}</button>
+  <div class="row small mt12" style="gap:8px">${ICON.flag()}<span>Objectif : examen d'État de traductrice (Bade-Wurtemberg) · français · droit</span></div>`;
 };
 
 /* --- Session de vocabulaire (réponse écrite) --- */
-function startVocab(onlyIds, after) {
-  const words = buildVocabSession(S.vocabSize, onlyIds);
+function startVocab(onlyIds, after, theme) {
+  const words = buildVocabSession(S.vocabSize, onlyIds, theme);
   if (!words.length) { toast('Aucun mot à réviser'); return; }
   const qs = words.map((w) => { const s = wstate(w.id); return { word: w, isNew: !s, last: s ? s.last : null }; });
   go('vocab', { qs, i: 0, res: null, hint: false, right: 0, missed: [], retry: false, after: after || null, firstTotal: qs.length });
@@ -411,9 +449,51 @@ VIEWS.vocab = () => {
 };
 
 /* --- Session de grammaire --- */
-function startGrammar() { go('grammar', { qs: buildGrammarSession(5), i: 0, picked: null, right: 0 }); }
+const CONJ_WEIGHTS = [['subj', 3], ['cond', 2], ['pr', 2], ['fut', 1], ['imp', 1], ['ps', 1], ['pp', 1]];
+function conjForm(verb, tense, p) {
+  const c = CONJ[verb]; const IMP = ['ais', 'ais', 'ait', 'ions', 'iez', 'aient'], FUT = ['ai', 'as', 'a', 'ons', 'ez', 'ont'];
+  if (tense === 'pr') return c.pr[p]; if (tense === 'subj') return c.subj[p];
+  if (tense === 'imp') return c.imp + IMP[p]; if (tense === 'fut') return c.fut + FUT[p]; if (tense === 'cond') return c.fut + IMP[p];
+  if (tense === 'ps') return p >= 3 ? c.ps[1] : c.ps[0]; return c.pp;
+}
+function pronoun(p, form) { const pr = PERSONS[p]; return p === 0 && /^[aeiouyhéèêâîôû]/i.test(form) ? "j'" : pr + ' '; }
+function conjFrame(item) {
+  const form = conjForm(item.verb, item.tense, item.p);
+  return TENSES[item.tense].cadre.replace('{p} ', item.tense === 'pp' ? '' : pronoun(item.p, form)).replace(/que (ils?) /, "qu'$1 ");
+}
+function buildConj(n) {
+  const verbs = Object.keys(CONJ); const bag = []; CONJ_WEIGHTS.forEach(([t, w]) => { for (let i = 0; i < w; i++) bag.push(t); });
+  const out = []; const used = new Set();
+  while (out.length < n) {
+    const verb = verbs[Math.floor(Math.random() * verbs.length)]; const tense = bag[Math.floor(Math.random() * bag.length)];
+    const p = tense === 'ps' ? (Math.random() < 0.5 ? 2 : 5) : Math.floor(Math.random() * 6);
+    const key = verb + tense + p; if (used.has(key)) continue; used.add(key);
+    out.push({ type: 'c', verb, tense, p });
+  }
+  return out;
+}
+function checkConj(input, answer) {
+  let s = String(input || '').toLowerCase().trim().replace(/[’`]/g, "'").replace(/\s+/g, ' ');
+  s = s.replace(/^que? /, '').replace(/^qu'/, '').replace(/^(j'|je |tu |il |elle |on |nous |vous |ils |elles )/, '').trim();
+  if (s === answer) return { ok: true };
+  if (stripAcc(s) === stripAcc(answer)) return { ok: true, accent: true };
+  return { ok: false };
+}
+function startGrammar() {
+  const qs = buildGrammarSession(5).map((gi) => ({ type: 'g', gi })).concat(buildConj(5));
+  go('grammar', { qs, i: 0, picked: null, res: null, right: 0 });
+}
+function ruleCard(topic, open) {
+  const r = RULES[topic]; if (!r) return '';
+  const body = `<ul style="margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5;font-weight:600">${r.map((x) => `<li style="margin-bottom:4px">${esc(x)}</li>`).join('')}</ul>`;
+  return open ? `<div class="card mt12" style="border:2px solid var(--gold);box-shadow:none"><span class="tag amber">Nouvelle règle · ${esc(topic)}</span>${body}</div>`
+    : `<details class="mt8"><summary>Revoir la règle : ${esc(topic)}</summary><div class="card">${body}</div></details>`;
+}
 VIEWS.grammar = () => {
-  const gi = UI.qs[UI.i]; const g = GRAMMAR[gi]; const n = UI.qs.length;
+  let item = UI.qs[UI.i]; if (typeof item === 'number') item = { type: 'g', gi: item };
+  const n = UI.qs.length;
+  if (item.type === 'c') return conjView(item, n);
+  const g = GRAMMAR[item.gi];
   const parts = g.q.split('___');
   let blank = '<span style="display:inline-block;min-width:80px;border-bottom:3px solid var(--indigo);color:var(--faint);padding:0 6px">……</span>';
   if (UI.picked !== null) { const ok = UI.picked === g.a; blank = `<span style="display:inline-block;padding:0 6px;border-bottom:3px solid ${ok ? 'var(--green)' : 'var(--red)'};color:${ok ? 'var(--green-text)' : 'var(--red-text)'}">${esc(g.o[UI.picked])}</span>`; }
@@ -422,15 +502,40 @@ VIEWS.grammar = () => {
     let cls = ''; if (UI.picked !== null) { if (k === g.a) cls = 'ok'; else if (k === UI.picked) cls = 'ko'; }
     return `<button class="option ${cls}" style="justify-content:center;font-size:16px" data-act="pickGrammar" data-arg="${k}" ${UI.picked !== null ? 'disabled' : ''}>${esc(o)}</button>`;
   }).join('');
+  const newRule = !UI.test && UI.picked === null && !(S.rulesSeen || {})[g.t];
   let fb = '';
   if (UI.picked !== null) { const ok = UI.picked === g.a; fb = `<div class="feedback ${ok ? 'ok' : 'ko'} mt12"><b>${ok ? 'Bravo ! +' + (UI.test ? 2 * XP.grammar : XP.grammar) + ' XP' : 'Réponse : « ' + esc(g.o[g.a]) + ' »'}</b><span>${esc(g.e)}</span></div>`; }
   return `${progressHead(UI.i, n)}
   <div class="row mt16"><span class="tag indigo">Grammaire · ${esc(g.t)}</span></div>
+  ${newRule ? ruleCard(g.t, true) : ''}
   <div class="card mt12" style="padding:22px 20px"><p style="margin:0;font-size:19px;line-height:1.6;font-weight:700">${sentence}</p></div>
   <div class="${g.o.length === 2 ? 'grid2' : 'col'} mt16">${opts}</div>
   ${fb}
+  ${newRule ? '' : ruleCard(g.t, false)}
   <div class="mt16">${UI.picked === null ? '<button class="btn" disabled>Choisis une réponse</button>' : `<button class="btn" data-act="nextGrammar">${UI.i + 1 < n ? 'Continuer' : 'Terminer'}</button>`}</div>`;
 };
+function conjTable(verb, tense) {
+  if (tense === 'pp') return `<div style="font-weight:800">${esc(CONJ[verb].pp)}</div>`;
+  const idx = tense === 'ps' ? [2, 5] : [0, 1, 2, 3, 4, 5];
+  return `<div class="grid2" style="gap:4px 12px;font-size:14px">${idx.map((p) => { const f = conjForm(verb, tense, p); const pre = tense === 'subj' ? ('que ' + pronoun(p, f)).replace(/^que (ils?) /, "qu'$1 ") : pronoun(p, f); return `<div><span class="muted">${esc(pre)}</span><b>${esc(f)}</b></div>`; }).join('')}</div>`;
+}
+function conjView(item, n) {
+  const T = TENSES[item.tense]; const answer = conjForm(item.verb, item.tense, item.p); const r = UI.res;
+  const filled = r ? `<span style="color:${r.ok ? 'var(--green-text)' : 'var(--red-text)'};border-bottom:3px solid ${r.ok ? 'var(--green)' : 'var(--red)'};padding:0 4px">${esc(r.typed || '…')}</span>` : '<span style="display:inline-block;min-width:80px;border-bottom:3px solid var(--indigo)">&nbsp;</span>';
+  const frame = esc(conjFrame(item)).replace('___', filled);
+  let body;
+  if (!r) body = `<form data-form="conj" class="mt16" autocomplete="off"><label for="ans" class="h3" style="display:block;margin-bottom:8px">Écris la forme du verbe</label>
+      <input type="text" id="ans" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Ta réponse…" style="font-size:18px">
+      <button type="submit" class="btn mt12">Valider</button></form>
+      <div class="mt8"><button class="btn ghost sm" data-act="dunnoConj">Je ne sais pas</button></div>`;
+  else body = `<div class="feedback ${r.ok ? 'ok' : 'ko'} mt12"><b>${r.ok ? 'Exact ! +' + XP.grammar + ' XP' : 'Réponse : ' + esc(answer)}</b><span>${r.accent ? 'Attention aux accents : ' + esc(answer) + '<br>' : ''}${esc(T.regle)}</span></div>
+      <div class="card mt12 col"><span class="label">${esc(item.verb)} · ${esc(T.nom)}</span>${conjTable(item.verb, item.tense)}</div>
+      <div class="mt16"><button class="btn" data-act="nextGrammar">${UI.i + 1 < n ? 'Continuer' : 'Terminer'}</button></div>`;
+  return `${progressHead(UI.i, n)}
+  <div class="row mt16" style="gap:6px;flex-wrap:wrap"><span class="tag plum">Conjugaison · ${esc(T.nom)}</span></div>
+  <div class="card mt12 col" style="padding:22px 20px;gap:10px"><span class="label">Verbe</span><span style="font-size:28px;font-weight:900">${esc(item.verb)}</span><p style="margin:0;font-size:19px;line-height:1.6;font-weight:700">${frame}</p></div>
+  ${body}`;
+}
 
 /* --- Test du dimanche --- */
 function startTest() {
@@ -480,29 +585,51 @@ function openText() {
     if (e.status === 'sent') return go('paste', { id: e.id, forRewrite: true });
     return go('rewrite', { id: e.id, step: (e.words && e.words.length && !(e.rewrite && e.rewrite.learned)) ? 'learn' : 'write' });
   }
-  if (!e) return go('textIntro', { kind: tt.kind, taskId: tt.task.id, pair: tt.pair, dayB: tt.dayB });
+  if (!e) return go('textIntro', { kind: tt.kind, taskId: tt.task.id, topics: tt.topics ? tt.topics.map((x) => x.id) : null, pair: tt.pair, dayB: tt.dayB });
   if (e.status === 'draft') return go('write', { id: e.id });
   return go('sendClaude', { id: e.id, rewrite: false });
 }
+function lineCount(t) { return Math.max(1, Math.round(String(t || '').length / 60)); }
+function targetMinutes(kind, task, mock) {
+  if (mock) return (KIND_INFO[kind] || {}).mins || 90;
+  if (kind === 'essai') return 60;
+  return task && task.source ? Math.max(5, lineCount(task.source) * 3) : 30;
+}
 VIEWS.textIntro = () => {
-  const task = TEXTS[UI.kind].find((t) => t.id === UI.taskId); const isTrad = UI.kind !== 'redaction';
-  return `${topBar('Texte du jour', 'home')}
-  <div class="row mt12" style="flex-wrap:wrap;gap:6px"><span class="tag ${isTrad ? 'plum' : 'amber'}">${esc(KIND_LABEL[UI.kind])}</span>${isTrad ? '<span class="tag indigo">Mode examen · sans dictionnaire</span>' : ''}</div>
-  <div class="card mt12 col"><span class="label">${esc(task.titre)}</span>${task.consigne ? `<span class="source">${esc(task.consigne)}</span>` : `<span class="muted small">Le texte à traduire s'affiche quand tu commences. Un chrono démarre, comme à l'examen.</span>`}</div>
-  <div class="card mt12 row" style="gap:12px">${marmot(56)}<span class="small" style="flex:1;line-height:1.45">${UI.dayB ? "Ce texte était prévu hier : écris-le aujourd'hui. Demain, un nouveau texte arrive." : "Chaque texte dure 2 jours : aujourd'hui tu l'écris, demain tu le réécris après la correction de Claude. Ça laisse le temps d'apprendre le vocabulaire."}</span></div>
-  <div class="mt20"><button class="btn" data-act="beginText">Commencer</button></div>
-  ${S.texts.length ? '' : '<p class="small mt12" style="text-align:center">Astuce : tu peux écrire en plusieurs fois, le brouillon est gardé.</p>'}`;
+  const kind = UI.kind; const trad = isTradKind(kind); const info = KIND_INFO[kind] || {};
+  const back = UI.mock || UI.free ? 'train' : 'home';
+  const tags = `<div class="row mt12" style="flex-wrap:wrap;gap:6px"><span class="tag ${trad ? 'plum' : 'amber'}">${esc(KIND_LABEL[kind])}</span><span class="tag indigo">Sans dictionnaire</span>${UI.mock ? '<span class="tag red">Épreuve blanche</span>' : ''}</div>`;
+  const exam = `À l'examen : ${kind === 'essai' ? 'un sujet au choix parmi trois, 180 minutes' : 'environ 30 lignes en 90 minutes'}, sans aucun dictionnaire.`;
+  if (kind === 'essai') {
+    const topics = (UI.topics || []).map((id) => TEXTS.essai.find((t) => t.id === id)).filter(Boolean);
+    return `${topBar(UI.mock ? 'Épreuve blanche' : 'Texte du jour', back)}${tags}
+    <div class="card mt12 col"><span class="label">Choisis ton sujet</span><span class="small" style="line-height:1.45">Rédige un essai argumenté en français (${UI.mock ? 'environ 600 mots' : '300 à 400 mots'}) : introduction, deux ou trois parties, conclusion.</span></div>
+    <div class="col mt12">${topics.map((t) => `<button class="option" data-act="beginEssay" data-arg="${t.id}"><span style="flex:1;line-height:1.4">${esc(t.consigne)}</span>${ICON.chev()}</button>`).join('')}</div>
+    <p class="small mt12" style="line-height:1.45">${exam} ${UI.mock ? 'Chrono : 180 minutes.' : 'Objectif ici : environ 60 minutes.'}</p>`;
+  }
+  const task = TEXTS[kind].find((t) => t.id === UI.taskId);
+  return `${topBar(UI.mock ? 'Épreuve blanche' : UI.free ? 'Entraînement libre' : 'Texte du jour', back)}${tags}
+  <div class="card mt12 col"><span class="label">${esc(task.titre)}${task.dom ? ' · ' + esc(DOM_LABEL[task.dom]) : ''}</span><span class="muted small" style="line-height:1.45">Traduction du ${info.from === 'de' ? 'allemand vers le français' : 'français vers l’allemand'}. Le texte s'affiche quand tu commences et le chrono démarre.</span></div>
+  <div class="card mt12 row" style="gap:12px">${marmot(56)}<span class="small" style="flex:1;line-height:1.45">${exam} ${UI.mock ? 'Chrono : ' + info.mins + ' minutes.' : 'Ici : environ ' + lineCount(task.source) + ' lignes, objectif ' + targetMinutes(kind, task) + ' minutes.'}${UI.mock || UI.free ? '' : UI.dayB ? " Ce texte était prévu hier : fais-le aujourd'hui, demain un nouveau texte arrive." : " Demain, tu le réécriras après la correction de Claude."}</span></div>
+  <div class="mt20"><button class="btn" data-act="beginText">Commencer</button></div>`;
 };
 VIEWS.write = () => {
-  const e = entryById(UI.id); const t = taskOf(e); const isTrad = e.kind !== 'redaction';
-  const wc = wordCount(e.draft);
-  return `${topBar(isTrad ? 'Traduction' : 'Rédaction', 'home', isTrad ? `<span class="timer">${ICON.clock()}<span id="timer">${fmtTime(e.seconds || 0)}</span></span>` : '')}
-  <div class="row mt8" style="flex-wrap:wrap;gap:6px"><span class="tag ${isTrad ? 'plum' : 'amber'}">${esc(KIND_LABEL[e.kind])}</span>${isTrad ? '<span class="tag indigo">Sans dictionnaire</span>' : ''}</div>
-  <div class="card mt12 col"><span class="label">${t.source ? 'Texte source · ' + (e.kind === 'trad_de_fr' ? 'allemand' : 'français') : 'Consigne · ' + esc(t.titre)}</span><span class="source">${esc(t.source || t.consigne)}</span></div>
-  <label for="draft" class="small mt16" style="display:block;font-weight:800;margin-bottom:8px">${e.kind === 'trad_fr_de' ? 'Deine Übersetzung ins Deutsche' : isTrad ? 'Ta traduction en français' : 'Ton texte'}</label>
-  <textarea id="draft" class="write" data-input="draft" placeholder="${isTrad ? 'Traduis ici…' : 'Écris ici…'}">${esc(e.draft)}</textarea>
-  <div class="between small mt8"><span id="wc">${wc} mot${wc > 1 ? 's' : ''}${e.kind === 'redaction' ? ' · objectif 150 à 200' : ''}</span><span>Brouillon enregistré</span></div>
-  <div class="mt16"><button class="btn" data-act="finishText">Terminer mon texte</button></div>`;
+  const e = entryById(UI.id); const t = taskOf(e); const info = KIND_INFO[e.kind] || {}; const trad = isTradKind(e.kind);
+  const wc = wordCount(e.draft); const target = targetMinutes(e.kind, t, e.mock);
+  const timerTxt = e.mock ? fmtTime(Math.max(0, target * 60 - (e.seconds || 0))) : fmtTime(e.seconds || 0);
+  const goal = e.kind === 'essai' ? (e.mock ? ' · environ 600 mots' : ' · objectif 300 à 400') : e.kind === 'redaction' ? ' · objectif 150 à 200' : '';
+  return `${topBar(trad ? 'Traduction' : 'Essai', e.mock || e.free ? 'train' : 'home', `<span class="timer">${ICON.clock()}<span id="timer">${timerTxt}</span></span>`)}
+  <div class="row mt8" style="flex-wrap:wrap;gap:6px"><span class="tag ${trad ? 'plum' : 'amber'}">${esc(KIND_LABEL[e.kind])}</span><span class="tag indigo">Sans dictionnaire</span>${t.dom ? `<span class="tag green">${esc(DOM_LABEL[t.dom])}</span>` : ''}</div>
+  <p class="small mt8">${e.mock ? 'Épreuve blanche : ' + target + ' minutes, temps restant affiché.' : 'Objectif : environ ' + target + ' minutes.'}</p>
+  <div class="card mt8 col"><span class="label">${t.source ? 'Texte source · ' + (info.from === 'de' ? 'allemand' : 'français') : 'Sujet · ' + esc(t.titre)}</span><span class="source" style="white-space:pre-wrap">${esc(t.source || t.consigne)}</span></div>
+  ${e.handwritten ? `<div class="card mt16 col" style="border:2px dashed var(--indigo);box-shadow:none"><span class="h3">Écrit à la main</span><span class="small" style="line-height:1.45">Écris sur papier, puis appuie sur « J'ai fini ». Tu enverras une photo de ta copie à Claude, qui la transcrira et la corrigera.</span><button class="btn ghost sm" data-act="toggleHand">Revenir au clavier</button></div>
+  <div class="mt16"><button class="btn" data-act="finishText">J'ai fini, envoyer ma photo à Claude</button></div>` : `
+  <label for="draft" class="small mt16" style="display:block;font-weight:800;margin-bottom:8px">${info.into === 'de' && trad ? 'Deine Übersetzung ins Deutsche' : trad ? 'Ta traduction en français' : 'Ton texte'}</label>
+  <textarea id="draft" class="write" data-input="draft" placeholder="${trad ? 'Traduis ici…' : 'Écris ici…'}">${esc(e.draft)}</textarea>
+  <div class="between small mt8"><span id="wc">${wc} mot${wc > 1 ? 's' : ''}${goal}</span><span>Brouillon enregistré</span></div>
+  <div class="mt16"><button class="btn" data-act="finishText">Terminer mon texte</button></div>
+  <div class="mt8"><button class="btn ghost sm" data-act="toggleHand">J'écris à la main (photo pour Claude)</button></div>
+  <p class="small mt8" style="line-height:1.45">Astuce iPhone : pour recopier une feuille manuscrite dans la zone de texte, touche la zone puis l'icône « Scanner le texte » du clavier.</p>`}`;
 };
 function fmtTime(s) { return pad(Math.floor(s / 60)) + ':' + pad(s % 60); }
 
@@ -513,7 +640,7 @@ VIEWS.sendClaude = () => {
   <div class="col mt16" style="gap:10px">
     <div class="row" style="gap:10px;align-items:flex-start"><span class="go" style="padding:4px 9px">1</span><span style="font-weight:700">Copie ton texte avec les instructions de correction.</span></div>
     <button class="btn" data-act="copyPrompt">Copier pour Claude</button>
-    <div class="row mt8" style="gap:10px;align-items:flex-start"><span class="go" style="padding:4px 9px">2</span><span style="font-weight:700">Ouvre Claude, colle, envoie.</span></div>
+    <div class="row mt8" style="gap:10px;align-items:flex-start"><span class="go" style="padding:4px 9px">2</span><span style="font-weight:700">${(UI.rewrite ? e.rewrite && e.rewrite.handwritten : e.handwritten) ? 'Ouvre Claude, colle, ajoute la photo de ta copie (bouton +), puis envoie.' : 'Ouvre Claude, colle, envoie.'}</span></div>
     <a class="btn soft" href="https://claude.ai/new" target="_blank" rel="noopener">Ouvrir Claude</a>
     <div class="row mt8" style="gap:10px;align-items:flex-start"><span class="go" style="padding:4px 9px">3</span><span style="font-weight:700">Copie la réponse de Claude et colle-la ici.</span></div>
     <button class="btn gold" data-act="openPaste" data-arg="${e.id}">Coller la correction</button>
@@ -560,30 +687,74 @@ VIEWS.rewrite = () => {
   <label for="rwdraft" class="small mt12" style="display:block;font-weight:800;margin-bottom:8px">Ta nouvelle version</label>
   <textarea id="rwdraft" class="write" data-input="rwdraft" placeholder="Réécris ton texte sans copier la correction…">${esc(rw.draft)}</textarea>
   <div class="between small mt8"><span id="wc">${wordCount(rw.draft)} mots</span><span>Brouillon enregistré</span></div>
-  <div class="mt16"><button class="btn" data-act="finishRewrite">Terminer la réécriture</button></div>`;
+  <div class="mt16"><button class="btn" data-act="finishRewrite">${rw.handwritten ? "J'ai fini, envoyer ma photo à Claude" : 'Terminer la réécriture'}</button></div>
+  <div class="mt8"><button class="btn ghost sm" data-act="toggleRwHand">${rw.handwritten ? 'Revenir au clavier' : "J'écris à la main (photo pour Claude)"}</button></div>`;
+};
+
+/* --- Entraînement libre et épreuve blanche --- */
+VIEWS.train = () => {
+  const tf = UI.tf || 'jur_fr_de';
+  const kinds = [['jur_fr_de', 'FR → DE juridique'], ['gen_fr_de', 'FR → DE général'], ['jur_de_fr', 'DE → FR juridique'], ['gen_de_fr', 'DE → FR général'], ['essai', 'Essais']];
+  const doneIds = new Set(S.texts.filter((e) => e.status !== 'draft').map((e) => e.kind + ':' + e.taskId));
+  const list = (TEXTS[tf] || []).filter((t) => !t.mock).map((t) => `<button class="option" data-act="startFree" data-arg="${tf}:${t.id}"><span style="flex:1;min-width:0"><span style="display:block;font-weight:800">${esc(t.titre)}</span>${t.dom ? `<span class="small">${esc(DOM_LABEL[t.dom])}</span>` : t.consigne ? `<span class="small" style="display:block;line-height:1.35">${esc(t.consigne)}</span>` : ''}</span>${doneIds.has(tf + ':' + t.id) ? `<span class="check">${ICON.check()}</span>` : ICON.chev()}</button>`).join('');
+  const mocks = S.texts.filter((e) => e.mock && e.status !== 'draft').slice(-5).reverse();
+  return `${topBar('Entraînement', 'home')}
+  <div class="card dark mt12 col" style="gap:10px">
+    <span class="h3" style="color:#fff">Épreuve blanche</span>
+    <span style="font-size:13px;line-height:1.45;color:#D4D6F0;font-weight:600">Comme à l'examen du Bade-Wurtemberg : textes longs, chrono officiel (90 minutes, 180 pour l'essai), aucun dictionnaire. Le mieux : sur papier, puis photo pour Claude.</span>
+    ${KIND_ORDER.map((k, i) => `<button class="btn sm" style="background:var(--ink2);justify-content:space-between;text-align:left;gap:10px" data-act="startMock" data-arg="${k}"><span>${i + 1}. ${esc(KIND_SHORT[k])}</span><span style="color:#F5B301;white-space:nowrap">${KIND_INFO[k].mins} min</span></button>`).join('')}
+  </div>
+  ${mocks.length ? `<div class="card mt12 col"><span class="h3">Mes épreuves blanches</span>${mocks.map((e) => `<div class="between small"><span>${esc(KIND_SHORT[e.kind])} · ${e.date.split('-').reverse().join('/')}</span><b style="color:var(--ink)">${e.score != null ? String(e.score).replace('.', ',') + '/20' : e.status === 'sent' ? 'correction en attente' : '—'}</b></div>`).join('')}</div>` : ''}
+  <div class="h2 mt20">Textes au choix</div>
+  <p class="small" style="margin:6px 0 0">Pour s'entraîner en plus du texte du jour, sans réécriture.</p>
+  <div class="row mt12" style="gap:6px;flex-wrap:wrap">${kinds.map(([k, l]) => `<button class="tag ${tf === k ? 'indigo' : ''}" style="border:none;cursor:pointer;min-height:34px;${tf === k ? '' : 'background:#fff;color:var(--muted)'}" data-act="trainFilter" data-arg="${k}">${l}</button>`).join('')}</div>
+  <div class="col mt12">${list}</div>`;
 };
 
 /* --- Lexique --- */
+function themeCount(t) { return allWords().filter((w) => w.theme === t).length; }
+function tagChip(t, on) {
+  const focus = t === FOCUS_THEME;
+  const label = t === 'all' ? 'Toutes' : t === 'perso' ? 'Mes mots' : THEMES[t];
+  const style = on ? (focus ? 'background:var(--gold);color:var(--ink)' : '') : (focus ? 'background:var(--amber-soft);color:var(--amber-text);box-shadow:0 0 0 2px var(--gold) inset' : 'background:#fff;color:var(--muted)');
+  return `<button class="tag ${on && !focus ? 'indigo' : ''}" style="border:none;cursor:pointer;min-height:36px;${style}" data-act="lexTheme" data-arg="${t}">${focus ? '★ ' : ''}${esc(label)}${t === 'all' ? '' : ' · ' + themeCount(t)}</button>`;
+}
 function lexList() {
   const qy = (UI.q || '').toLowerCase().trim();
   const filter = UI.filter || 'all';
   let words = allWords();
   if (filter === 'mine') words = words.filter((w) => w.custom);
   if (filter === 'learning') words = words.filter((w) => wstate(w.id));
+  if (UI.theme && UI.theme !== 'all') words = words.filter((w) => w.theme === UI.theme);
   if (qy) words = words.filter((w) => (w.de + ' ' + w.fr + ' ' + w.note).toLowerCase().includes(qy));
   const shown = words.slice(0, 120);
   const rows = shown.map((w) => {
     const s = wstate(w.id); const box = s ? s.box : 0;
-    return `<div class="wordrow"><div style="flex:1;min-width:0"><div style="font-weight:800">${esc(w.de)}</div><div style="font-weight:600">${esc(w.fr)}</div>${w.note ? `<div class="small" style="margin-top:2px">${esc(w.note)}</div>` : ''}<div class="dots">${[1, 2, 3, 4, 5].map((i) => `<i class="${box >= i ? 'on' : ''}"></i>`).join('')}</div></div>${w.custom ? `<button class="iconbtn" data-act="delWord" data-arg="${w.id}" aria-label="Supprimer ce mot" style="color:var(--faint)">${ICON.close()}</button>` : ''}</div>`;
+    return `<div class="wordrow"><div style="flex:1;min-width:0"><span class="tag ${w.theme === FOCUS_THEME ? 'amber' : 'indigo'}" style="font-size:11px;padding:2px 8px;margin-bottom:4px">${esc(w.theme === 'perso' ? 'Mes mots' : THEMES[w.theme])}</span><div style="font-weight:800">${esc(w.de)}</div><div style="font-weight:600">${esc(w.fr)}</div>${w.note ? `<div class="small" style="margin-top:2px">${esc(w.note)}</div>` : ''}<div class="dots">${[1, 2, 3, 4, 5].map((i) => `<i class="${box >= i ? 'on' : ''}"></i>`).join('')}</div></div>${w.custom ? `<button class="iconbtn" data-act="delWord" data-arg="${w.id}" aria-label="Supprimer ce mot" style="color:var(--faint)">${ICON.close()}</button>` : ''}</div>`;
   }).join('');
   return (rows || '<div class="empty">Aucun mot trouvé.</div>') + (words.length > shown.length ? `<p class="small" style="text-align:center;padding:8px 0">${words.length - shown.length} autres : affine la recherche.</p>` : '');
 }
 VIEWS.lexique = () => {
+  const tab = UI.tab || 'mots';
+  const seg = `<div class="row mt12" style="gap:4px;background:var(--line);border-radius:14px;padding:4px">${[['mots', 'Mots'], ['regles', 'Règles'], ['conj', 'Conjugaison']].map(([k, l]) => `<button style="flex:1;height:40px;border:none;border-radius:10px;font-size:14px;font-weight:${tab === k ? 900 : 700};background:${tab === k ? '#fff' : 'transparent'};color:${tab === k ? 'var(--ink)' : 'var(--muted)'};cursor:pointer" data-act="lexTab" data-arg="${k}">${l}</button>`).join('')}</div>`;
+  if (tab === 'regles') {
+    return `<span class="h1">Lexique</span>${seg}
+    <p class="small mt12" style="line-height:1.45">Les règles de grammaire des exercices, avec les pièges typiques des germanophones.</p>
+    <div class="col mt8">${Object.keys(RULES).map((t) => `<details class="card" style="padding:4px 16px"><summary>${esc(t)}</summary><ul style="margin:0 0 12px;padding-left:18px;font-size:14px;line-height:1.5;font-weight:600">${RULES[t].map((x) => `<li style="margin-bottom:4px">${esc(x)}</li>`).join('')}</ul></details>`).join('')}</div>`;
+  }
+  if (tab === 'conj') {
+    const verb = UI.verb && CONJ[UI.verb] ? UI.verb : 'être';
+    return `<span class="h1">Lexique</span>${seg}
+    <div class="row mt12" style="flex-wrap:wrap;gap:6px">${Object.keys(CONJ).map((v) => `<button class="tag ${v === verb ? 'indigo' : ''}" style="border:none;cursor:pointer;min-height:34px;${v === verb ? '' : 'background:#fff;color:var(--muted)'}" data-act="conjVerb" data-arg="${v}">${esc(v)}</button>`).join('')}</div>
+    <div class="col mt12">${Object.keys(TENSES).map((t) => `<div class="card col" style="gap:8px"><span class="h3">${esc(TENSES[t].nom)}</span>${conjTable(verb, t)}<span class="small" style="line-height:1.4">${esc(TENSES[t].regle)}</span></div>`).join('')}</div>`;
+  }
   const filter = UI.filter || 'all';
   const learned = allWords().filter((w) => (wstate(w.id) || {}).box >= 3).length;
-  return `<div class="between"><span class="h1">Lexique</span><button class="btn sm soft" style="width:auto" data-act="nav" data-arg="addWord">+ Ajouter</button></div>
-  <p class="small" style="margin:6px 0 0">${allWords().length} mots · ${learned} bien acquis</p>
+  return `<div class="between"><span class="h1">Lexique</span><button class="btn sm soft" style="width:auto" data-act="nav" data-arg="addWord">+ Ajouter</button></div>${seg}
+  <p class="small" style="margin:10px 0 0">${allWords().length} mots · ${learned} bien acquis</p>
   <input type="search" class="mt12" placeholder="Chercher (allemand ou français)…" data-input="q" value="${esc(UI.q || '')}" aria-label="Chercher un mot">
+  <div class="row mt12" style="gap:6px;flex-wrap:wrap">${['all', FOCUS_THEME].concat(Object.keys(THEMES).filter((t) => t !== FOCUS_THEME), ['perso']).map((t) => tagChip(t, (UI.theme || 'all') === t)).join('')}</div>
+  ${UI.theme && UI.theme !== 'all' ? `<button class="btn sm mt12 ${UI.theme === FOCUS_THEME ? 'gold' : ''}" data-act="trainTheme" data-arg="${UI.theme}">Réviser l'étiquette « ${esc(UI.theme === 'perso' ? 'Mes mots' : THEMES[UI.theme])} »</button>` : ''}
   <div class="row mt12" style="gap:6px;flex-wrap:wrap">${[['all', 'Tous'], ['learning', 'En cours'], ['mine', 'Mes mots']].map(([k, l]) => `<button class="tag ${filter === k ? 'indigo' : ''}" style="border:none;cursor:pointer;min-height:34px;${filter === k ? '' : 'background:#fff;color:var(--muted)'}" data-act="lexFilter" data-arg="${k}">${l}</button>`).join('')}</div>
   <div class="card mt12" style="padding:4px 16px" id="lexlist">${lexList()}</div>`;
 };
@@ -592,6 +763,8 @@ VIEWS.addWord = () => `${topBar('Ajouter des mots', 'lexique')}
     <label class="small" for="nde" style="font-weight:800">Allemand</label><input type="text" id="nde" placeholder="die Nacherbfolge" autocomplete="off">
     <label class="small" for="nfr" style="font-weight:800">Français</label><input type="text" id="nfr" placeholder="la substitution fidéicommissaire" autocomplete="off">
     <label class="small" for="nnote" style="font-weight:800">Remarque (facultatif)</label><input type="text" id="nnote" placeholder="" autocomplete="off">
+    <label class="small" for="ntheme" style="font-weight:800">Étiquette</label>
+    <select id="ntheme" style="width:100%;border:2px solid var(--line);border-radius:14px;padding:12px 14px;font-size:16px;background:#fff">${[['perso', 'Mes mots']].concat(Object.entries(THEMES)).map(([k, l]) => `<option value="${k}" ${k === (UI.lastTheme || FOCUS_THEME) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
     <button class="btn mt8" data-act="saveWord">Ajouter</button>
   </div>
   <div class="card mt16 col">
@@ -617,7 +790,7 @@ VIEWS.progres = () => {
   const words = allWords(); const seen = words.filter((w) => wstate(w.id)).length; const learned = words.filter((w) => (wstate(w.id) || {}).box >= 3).length;
   const g = Object.values(S.grammar); const gOk = g.reduce((a, x) => a + x.ok, 0), gT = g.reduce((a, x) => a + x.ok + x.ko, 0);
   const nTexts = S.texts.filter((e) => e.status !== 'draft').length; const nRw = S.texts.filter((e) => e.rewrite && e.rewrite.status !== 'draft').length;
-  const nTrad = S.texts.filter((e) => e.kind !== 'redaction' && e.status !== 'draft').length;
+  const nTrad = S.texts.filter((e) => isTradKind(e.kind) && e.status !== 'draft').length;
   const scores = S.texts.filter((e) => e.score != null).slice(-6).map((e) => String(e.score).replace('.', ','));
   const bar = (label, val, pct, color) => `<div class="col" style="gap:5px"><div class="between" style="font-size:13px;font-weight:800"><span>${label}</span><span class="muted">${val}</span></div><div class="bar"><div style="width:${Math.max(0, Math.min(100, pct))}%;background:${color}"></div></div></div>`;
   const prevM = keyOf(new Date(y, m - 1, 1)).slice(0, 7), nextM = keyOf(new Date(y, m + 1, 1)).slice(0, 7);
@@ -631,7 +804,7 @@ VIEWS.progres = () => {
   <div class="card mt8 col" style="gap:12px">
     ${bar('Vocabulaire juridique', learned + ' acquis · ' + seen + ' vus', words.length ? learned / words.length * 100 : 0, 'var(--green)')}
     ${bar('Grammaire', gT ? Math.round(gOk / gT * 100) + ' % de réussite' : 'pas encore commencé', gT ? gOk / gT * 100 : 0, 'var(--indigo)')}
-    ${bar('Rédaction', plur(nTexts - nTrad, 'texte') + ' · ' + plur(nRw, 'réécriture'), Math.min(100, (nTexts - nTrad) * 5), '#B45309')}
+    ${bar('Essais et rédactions', plur(nTexts - nTrad, 'texte') + ' · ' + plur(nRw, 'réécriture'), Math.min(100, (nTexts - nTrad) * 5), '#B45309')}
     ${bar('Traduction DE ⇄ FR', plur(nTrad, 'texte') + ' · sans dictionnaire', Math.min(100, nTrad * 5), 'var(--plum)')}
   </div>
   <div class="grid2 mt12">
@@ -651,6 +824,12 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
     <div class="row" style="gap:6px">${[5, 10, 15, 20].map((n) => `<button class="tag ${S.vocabSize === n ? 'indigo' : ''}" style="border:none;cursor:pointer;min-height:40px;min-width:52px;justify-content:center;font-size:14px;${S.vocabSize === n ? '' : 'background:#F1F2F8;color:var(--muted)'}" data-act="vsize" data-arg="${n}">${n}</button>`).join('')}</div>
   </div>
   <div class="card mt12 col">
+    <span class="h3">Domaines travaillés</span>
+    <span class="small" style="line-height:1.45">Le vocabulaire et les textes juridiques du jour viennent uniquement des domaines choisis.</span>
+    <button class="tag ${S.focusSucc !== false ? '' : ''}" style="border:none;cursor:pointer;min-height:40px;font-size:14px;align-self:flex-start;${S.focusSucc !== false ? 'background:var(--gold);color:var(--ink)' : 'background:#F1F2F8;color:var(--muted)'}" data-act="toggleFocus">${S.focusSucc !== false ? '★ ' : ''}Mettre en avant les successions</button>
+    <div class="row" style="gap:6px;flex-wrap:wrap">${DOMAINS.map((d) => { const on = (S.domains || []).includes(d.id); return `<button class="tag ${on ? 'indigo' : ''}" style="border:none;cursor:pointer;min-height:40px;font-size:14px;${on ? '' : 'background:#F1F2F8;color:var(--muted)'}" data-act="toggleDomain" data-arg="${d.id}">${on ? '✓ ' : ''}${esc(d.label)}</button>`; }).join('')}</div>
+  </div>
+  <div class="card mt12 col">
     <span class="h3">Sauvegarde</span>
     <span class="small" style="line-height:1.45">Tes progrès sont enregistrés sur ce téléphone. Fais une sauvegarde de temps en temps (par exemple dans tes notes ou par e-mail).</span>
     <button class="btn soft sm" data-act="exportData">Exporter ma sauvegarde</button>
@@ -667,7 +846,7 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">LexRhin · version 1.5</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.6</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
@@ -678,10 +857,18 @@ function render() {
   const showTabs = TAB_VIEWS.includes(v);
   $('#app').classList.toggle('no-tabs', !showTabs);
   $('#tabbar').innerHTML = showTabs ? `<div class="tabbar"><nav>${[['home', 'Accueil', ICON.home()], ['lexique', 'Lexique', ICON.book()], ['progres', 'Progrès', ICON.chart()], ['profil', 'Profil', ICON.user()]].map(([k, l, ic]) => `<button class="tab ${v === k ? 'on' : ''}" data-act="nav" data-arg="${k}">${ic}${l}</button>`).join('')}</nav></div>` : '';
-  if ((v === 'vocab' || v === 'test') && !UI.res) { const a = $('#ans'); if (a) { try { a.focus({ preventScroll: true }); } catch (e) { } } }
+  if ((v === 'vocab' || v === 'test' || v === 'grammar') && !UI.res) { const a = $('#ans'); if (a) { try { a.focus({ preventScroll: true }); } catch (e) { } } }
   if (v === 'write') { // chrono pour les traductions
     const e = entryById(UI.id);
-    if (e && e.kind !== 'redaction') timerHandle = setInterval(() => { e.seconds = (e.seconds || 0) + 1; const el = $('#timer'); if (el) el.textContent = fmtTime(e.seconds); if (e.seconds % 15 === 0) save(); }, 1000);
+    if (e) {
+      const limit = e.mock ? targetMinutes(e.kind, taskOf(e), true) * 60 : 0;
+      timerHandle = setInterval(() => {
+        e.seconds = (e.seconds || 0) + 1; const el = $('#timer');
+        if (el) el.textContent = limit ? fmtTime(Math.max(0, limit - e.seconds)) : fmtTime(e.seconds);
+        if (limit && e.seconds === limit) toast('Temps écoulé ! Termine ta dernière phrase.');
+        if (e.seconds % 15 === 0) save();
+      }, 1000);
+    }
   }
 }
 
@@ -709,10 +896,16 @@ const ACT = {
     finish('v', [{ v: '+' + (UI.gained || 0), l: 'XP', gold: true }, { v: right + '/' + all, l: 'du premier coup' }, { v: allWords().filter((w) => (wstate(w.id) || {}).box >= 3).length, l: 'mots acquis' }], 'Vocabulaire terminé !', 'Les mots ratés reviendront demain.', !day().g ? { act: 'startGrammar', label: 'Enchaîner avec la grammaire' } : !day().t ? { act: 'openText', label: 'Passer au texte du jour' } : null);
   },
   startGrammar: () => { if (day().g) toast('Grammaire déjà faite : séance bonus'); startGrammar(); },
-  pickGrammar: (a) => { if (UI.picked !== null) return; UI.picked = +a; const gi = UI.qs[UI.i]; const ok = UI.picked === GRAMMAR[gi].a; gradeGrammar(gi, ok); if (ok) { UI.right++; addXP(XP.grammar); } save(); render(); },
+  pickGrammar: (a) => {
+    if (UI.picked !== null) return; UI.picked = +a; const it = UI.qs[UI.i]; const gi = typeof it === 'number' ? it : it.gi;
+    const ok = UI.picked === GRAMMAR[gi].a; gradeGrammar(gi, ok); S.rulesSeen = S.rulesSeen || {}; S.rulesSeen[GRAMMAR[gi].t] = true;
+    if (ok) { UI.right++; addXP(XP.grammar); } save(); render();
+  },
+  checkConjAct: () => { if (UI.res) return; const v = ($('#ans') || {}).value || ''; if (!v.trim()) return toast('Écris une réponse ou appuie sur « Je ne sais pas »'); gradeConj(v); },
+  dunnoConj: () => { if (UI.res) return; gradeConj(''); },
   nextGrammar: () => {
-    if (UI.i + 1 < UI.qs.length) { UI.i++; UI.picked = null; return render(); }
-    finish('g', [{ v: '+' + UI.right * XP.grammar, l: 'XP', gold: true }, { v: UI.right + '/' + UI.qs.length, l: 'bonnes réponses' }, { v: streak() + ' j', l: 'série' }], 'Grammaire terminée !', 'Les questions ratées reviendront bientôt.', !day().t ? { act: 'openText', label: 'Passer au texte du jour' } : !day().v ? { act: 'startVocab', label: 'Faire le vocabulaire' } : null);
+    if (UI.i + 1 < UI.qs.length) { UI.i++; UI.picked = null; UI.res = null; return render(); }
+    finish('g', [{ v: '+' + UI.right * XP.grammar, l: 'XP', gold: true }, { v: UI.right + '/' + UI.qs.length, l: 'bonnes réponses' }, { v: streak() + ' j', l: 'série' }], 'Grammaire et conjugaison terminées !', 'Les règles restent disponibles dans Lexique, onglet Règles.', !day().t ? { act: 'openText', label: 'Passer au texte du jour' } : !day().v ? { act: 'startVocab', label: 'Faire le vocabulaire' } : null);
   },
   startTest: () => startTest(),
   pickTest: (a) => {
@@ -728,12 +921,23 @@ const ACT = {
     go('bravo', { b: { title: 'Test terminé : ' + UI.right + '/' + UI.qs.length, sub: UI.right >= 20 ? 'Superbe semaine !' : UI.right >= 15 ? 'Très bien, continue comme ça.' : 'Les mots ratés reviennent en révision dès demain.', stats: [{ v: UI.right + '/' + UI.qs.length, l: 'score', gold: true }, { v: S.tests.length, l: 'tests passés' }, { v: totalStars(), l: 'étoiles' }], newStar: false, next: null } });
   },
   openText: () => openText(),
-  beginText: () => { const e = startNewEntry(UI.kind, TEXTS[UI.kind].find((t) => t.id === UI.taskId), UI.pair); go('write', { id: e.id }); },
+  beginText: () => { const e = startNewEntry(UI.kind, TEXTS[UI.kind].find((t) => t.id === UI.taskId), UI.mock || UI.free ? null : UI.pair, { mock: !!UI.mock, free: !!UI.free }); go('write', { id: e.id }); },
+  beginEssay: (a) => { const e = startNewEntry('essai', TEXTS.essai.find((t) => t.id === a), UI.mock || UI.free ? null : UI.pair, { mock: !!UI.mock, free: !!UI.free }); go('write', { id: e.id }); },
+  toggleRwHand: () => { const e = entryById(UI.id); e.rewrite = e.rewrite || { draft: '', status: 'draft' }; e.rewrite.handwritten = !e.rewrite.handwritten; save(); render(); },
+  toggleHand: () => { const e = entryById(UI.id); e.handwritten = !e.handwritten; save(); render(); },
+  startMock: (a) => { if (a === 'essai') return go('textIntro', { kind: 'essai', topics: TEXTS.essai.filter((t) => t.mock).map((t) => t.id), mock: true }); const t = TEXTS[a].find((x) => x.mock); go('textIntro', { kind: a, taskId: t.id, mock: true }); },
+  startFree: (a) => { const [kind, id] = a.split(':'); if (kind === 'essai') return go('textIntro', { kind, topics: [id], free: true }); go('textIntro', { kind, taskId: id, free: true }); },
+  trainFilter: (a) => { UI.tf = a; render(); },
+  toggleDomain: (a) => { const set = new Set(S.domains || []); if (set.has(a)) { if (set.size === 1) return toast('Garde au moins un domaine'); set.delete(a); } else set.add(a); S.domains = DOMAINS.map((d) => d.id).filter((id) => set.has(id)); save(); render(); },
+  lexTab: (a) => { UI.tab = a; render(); },
+  conjVerb: (a) => { UI.verb = a; render(); },
   finishText: () => {
-    const e = entryById(UI.id); if (wordCount(e.draft) < 10) return toast('Écris au moins quelques phrases');
-    e.status = 'sent'; e.sentAt = today(); const d = day(); if (!d.textRef) d.textRef = { id: e.id, mode: 'new' };
-    const first = !d.t; if (first) addXP(XP.text);
-    const before = hasStar(today()); d.t = true; save();
+    const e = entryById(UI.id); if (!e.handwritten && wordCount(e.draft) < 10) return toast('Écris au moins quelques phrases');
+    e.status = 'sent'; e.sentAt = today(); const d = day();
+    const before = hasStar(today());
+    if (e.mock || e.free) addXP(e.mock ? 80 : 20);
+    else { if (!d.t) addXP(XP.text); d.t = true; }
+    save();
     UI = { view: 'sendClaude', id: e.id, rewrite: false };
     if (!before && hasStar(today())) toast('Étoile du jour gagnée !'); render(); window.scrollTo(0, 0);
   },
@@ -756,17 +960,20 @@ const ACT = {
   learnRewriteWords: () => { const id = UI.id; const e = entryById(id); startVocab(e.words, () => { e.rewrite = Object.assign(e.rewrite || { draft: '', status: 'draft' }, { learned: true }); save(); go('rewrite', { id, step: 'write' }); }); },
   rewriteWrite: () => { const e = entryById(UI.id); e.rewrite = Object.assign(e.rewrite || { draft: '', status: 'draft' }, { learned: true }); save(); go('rewrite', { id: e.id, step: 'write' }); },
   finishRewrite: () => {
-    const e = entryById(UI.id); if (!e.rewrite || wordCount(e.rewrite.draft) < 10) return toast('Écris ta nouvelle version d’abord');
-    e.rewrite.status = 'sent'; e.rewrite.date = today(); const d = day(); d.textRef = { id: e.id, mode: 'rewrite' };
+    const e = entryById(UI.id); if (!e.rewrite || (!e.rewrite.handwritten && wordCount(e.rewrite.draft) < 10)) return toast('Écris ta nouvelle version d’abord');
+    e.rewrite.status = 'sent'; e.rewrite.date = today(); const d = day();
     if (!d.t) addXP(XP.rewrite); const before = hasStar(today()); d.t = true; save();
     UI = { view: 'sendClaude', id: e.id, rewrite: true }; if (!before && hasStar(today())) toast('Étoile du jour gagnée !'); render(); window.scrollTo(0, 0);
   },
   lexFilter: (a) => { UI.filter = a; render(); },
+  lexTheme: (a) => { UI.theme = a; render(); },
+  trainTheme: (a) => startVocab(null, null, a),
+  toggleFocus: () => { S.focusSucc = S.focusSucc === false; save(); render(); },
   delWord: (a) => { S.custom = S.custom.filter((w) => w.id !== a); delete S.vocab[a]; save(); render(); toast('Mot supprimé'); },
-  saveWord: () => { const id = addCustomWord($('#nde').value, $('#nfr').value, $('#nnote').value); if (!id) return toast('Remplis l’allemand et le français'); save(); toast('Mot ajouté'); go('addWord'); },
+  saveWord: () => { const th = $('#ntheme').value; const id = addCustomWord($('#nde').value, $('#nfr').value, $('#nnote').value, th); if (!id) return toast('Remplis l’allemand et le français'); save(); toast('Mot ajouté'); go('addWord', { lastTheme: th }); },
   importWords: () => {
     const lines = ($('#bulk').value || '').split(/\r?\n/); let n = 0;
-    lines.forEach((l) => { const p = l.replace(/^[-*•\d.)\s]+/, '').split(/\s*[;|]\s*/); if (p.length >= 2 && addCustomWord(p[0], p[1], p.slice(2).join(' ; '))) n++; });
+    lines.forEach((l) => { const p = l.replace(/^[-*•\d.)\s]+/, '').split(/\s*[;|]\s*/); if (p.length >= 2 && addCustomWord(p[0], p[1], p.slice(2).join(' ; '), ($('#ntheme') || {}).value)) n++; });
     save(); toast(n + ' mot' + (n > 1 ? 's' : '') + ' importé' + (n > 1 ? 's' : '')); if (n) go('lexique', { filter: 'mine' });
   },
   month: (a) => { UI.month = a; render(); },
@@ -789,6 +996,13 @@ const ACT = {
   doReset: () => { S = defaults(); save(); toast('Progression effacée'); go('home'); }
 };
 
+function gradeConj(typed) {
+  const it = UI.qs[UI.i]; const answer = conjForm(it.verb, it.tense, it.p);
+  const c = typed ? checkConj(typed, answer) : { ok: false };
+  UI.res = { typed: typed.trim(), ok: c.ok, accent: c.accent };
+  S.conj = S.conj || {}; const k = it.verb + ':' + it.tense; const st = S.conj[k] || { ok: 0, ko: 0 }; c.ok ? st.ok++ : st.ko++; S.conj[k] = st;
+  if (c.ok) { UI.right++; addXP(XP.grammar); } save(); render();
+}
 function copy(text) {
   const fallback = () => {
     const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
@@ -805,6 +1019,7 @@ document.addEventListener('click', (ev) => {
 });
 document.addEventListener('submit', (ev) => {
   const f = ev.target; if (f && f.dataset && f.dataset.form === 'check') { ev.preventDefault(); ACT.checkWord(); }
+  if (f && f.dataset && f.dataset.form === 'conj') { ev.preventDefault(); ACT.checkConjAct(); }
 });
 document.addEventListener('input', (ev) => {
   const el = ev.target; const k = el.dataset && el.dataset.input; if (!k) return;
@@ -812,7 +1027,9 @@ document.addEventListener('input', (ev) => {
   else if (k === 'rwdraft') { const e = entryById(UI.id); e.rewrite = e.rewrite || { draft: '', status: 'draft' }; e.rewrite.draft = el.value; $('#wc').textContent = wordCount(el.value) + ' mots'; save(); }
   else if (k === 'name') { S.name = el.value.trim(); save(); }
   else if (k === 'q') { UI.q = el.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(); }
+  else if (k === 'theme') { UI.theme = el.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(); }
 });
+document.addEventListener('change', (ev) => { const el = ev.target; if (el && el.tagName === 'SELECT' && el.dataset.input === 'theme') { UI.theme = el.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(); } });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && TAB_VIEWS.includes(UI.view)) render(); });
 
 render();
