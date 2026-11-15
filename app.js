@@ -621,7 +621,7 @@ VIEWS.profil = () => `<span class="h1">Profil</span>
   <details class="mt12"><summary style="color:var(--red-text)">Tout effacer</summary>
     <div class="card col"><span class="small">Supprime toute la progression sur ce téléphone. Pense à exporter avant.</span><button class="btn danger sm" data-act="${UI.confirmReset ? 'doReset' : 'askReset'}">${UI.confirmReset ? 'Confirmer : tout effacer' : 'Effacer ma progression'}</button></div>
   </details>
-  <p class="small mt16" style="text-align:center">LexRhin · version 1.2</p>`;
+  <p class="small mt16" style="text-align:center">LexRhin · version 1.3</p>`;
 
 /* ---------- Rendu ---------- */
 const TAB_VIEWS = ['home', 'lexique', 'progres', 'profil'];
@@ -762,5 +762,5 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 render();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:' && window.self === window.top) {
-  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => { }); });
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => { }); });
 }
